@@ -1,3 +1,4 @@
+# Normalize either supported plan input form to the object used by preflight.
 function Resolve-ADOffboardingPlanInput {
     [CmdletBinding()]
     param($Plan, [string]$PlanPath)
@@ -78,6 +79,7 @@ function Invoke-ADOffboardingPreflight {
     & $add 'PlanId' ([guid]::TryParse([string]$Plan.PlanId, [ref]$planGuid)) 'PlanId must be a GUID.'
 
     # --- Integrity ----------------------------------------------------------------------------
+    # Hash equality detects content changes, not who approved or authored the plan.
     $computed = Get-ADOffboardingPlanHash -Plan $Plan
     $integrityOk = ([string]$Plan.Integrity.Algorithm -eq 'SHA256') -and ([string]$Plan.Integrity.Hash -ieq $computed)
     & $add 'Integrity' $integrityOk 'Plan content hash must match (detects modification only; not proof of approval or authenticity).'
@@ -129,6 +131,7 @@ function Invoke-ADOffboardingPreflight {
     if (-not $Live) { return (& $finish $null) }
 
     # --- Live state ---------------------------------------------------------------------------
+    # Resolve by GUID and compare SID as well, then re-evaluate protection and scope on current data.
     $snap = $null
     try { $snap = Get-ADIdentitySnapshot -Identity ([string]$Plan.Target.ObjectGuid) -Config $Config }
     catch { & $add 'LiveTargetResolved' $false ('Target could not be re-read from the configured domain controller: ' + (Get-SanitizedText -Text $_.Exception.Message)) }
@@ -147,6 +150,7 @@ function Invoke-ADOffboardingPreflight {
     }
     & $add 'LiveInScope' $scopeOk $scopeDetail
 
+    # Credit only previously recorded successful actions of this plan when checking expected drift.
     $expectedEnabled = [bool]$Plan.ObservedState.Enabled
     if ($Carryover.Disable) { $expectedEnabled = $false }
     $enabledNow = $snap.Target.Enabled
@@ -187,6 +191,21 @@ function Test-ADOffboardingPlan {
         Offline checks: schema, integrity hash, expiry, configuration fingerprint, action structure,
         exclusions. With -CheckLiveState the target is also re-read from the configured domain
         controller to check identity, protection, scope, and state drift.
+
+    .PARAMETER Plan
+        In-memory plan object to validate.
+
+    .PARAMETER PlanPath
+        Path to a serialized plan instead of an in-memory object.
+
+    .PARAMETER Config
+        Configuration object or JSON path used for comparison.
+
+    .PARAMETER CheckLiveState
+        Also query the configured domain controller; without this switch validation is offline.
+
+    .OUTPUTS
+        A validation object with IsValid, individual checks, and failed checks.
 
     .EXAMPLE
         Test-ADOffboardingPlan -PlanPath .\plan.json -Config .\ADIdentityOps.json -CheckLiveState

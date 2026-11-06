@@ -5,6 +5,7 @@
 param()
 
 BeforeAll {
+    # Install stand-in AD commands before module import; no test in this suite needs a real domain.
     $script:ModuleRoot = Split-Path -Path $PSScriptRoot -Parent
     . (Join-Path $script:ModuleRoot 'Demo/FakeActiveDirectory.ps1')
     Import-Module (Join-Path $script:ModuleRoot 'ADIdentityOps.psd1') -Force
@@ -20,6 +21,7 @@ BeforeAll {
 
     function Resolve-Cfg {
         param($Config)
+        # InModuleScope permits focused tests of private helpers without exporting them publicly.
         InModuleScope ADIdentityOps -Parameters @{ C = $Config } { param($C) Resolve-ADIdentityConfig -Config $C }
     }
 
@@ -39,6 +41,7 @@ AfterAll {
 
 Describe 'ADIdentityOps' {
 BeforeEach {
+    # Reset the synthetic directory for each example so prior writes and injected failures cannot leak.
     Initialize-SyntheticDirectory
     $cfg = New-SyntheticConfig
     $cfg.Output.ResultDirectory = $TestDrive
@@ -203,6 +206,7 @@ Describe 'Test-ADOffboardingPlan' {
 }
 
 Describe 'Invoke-ADOffboardingPlan' {
+    # Exercise fail-closed preflight, WhatIf, dependent-action blocking, partial runs, and resume.
     It 'requires the plan id to be confirmed' {
         $plan = New-TestPlan -Config $cfg
         { Invoke-ADOffboardingPlan -Plan $plan -Config $cfg -ConfirmPlanId ([guid]::NewGuid().ToString()) -Confirm:$false } | Should -Throw '*ConfirmPlanId*'

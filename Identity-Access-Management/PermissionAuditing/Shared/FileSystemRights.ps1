@@ -14,6 +14,7 @@ function Test-FileSystemRight {
         [Parameter(Mandatory)][System.Security.AccessControl.FileSystemRights]$Rights,
         [Parameter(Mandatory)][System.Security.AccessControl.FileSystemRights]$Required
     )
+    # -band returns shared bits; equality is necessary to require the entire composite mask.
     return (($Rights -band $Required) -eq $Required)
 }
 
@@ -36,6 +37,7 @@ function Convert-FileSystemRightsLabel {
     if (Test-FileSystemRight -Rights $Rights -Required $fsr::Write)          { return 'Write' }
     if (Test-FileSystemRight -Rights $Rights -Required $fsr::ReadAndExecute) { return 'ReadExecute' }
     if (Test-FileSystemRight -Rights $Rights -Required $fsr::Read)           { return 'Read' }
+    # ReadData and ListDirectory are aliases; use a stable label across .NET platforms.
     if ($Rights -eq $fsr::ReadData) { return 'ReadData' }
     return $Rights.ToString()
 }

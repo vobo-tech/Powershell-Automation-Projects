@@ -19,6 +19,12 @@ function Test-ADOffboardingResult {
     .PARAMETER Result
         A result object from Invoke-ADOffboardingPlan or the path to its JSON file.
 
+    .PARAMETER Config
+        Configuration object or JSON path selecting the domain controller and quarantine OU.
+
+    .OUTPUTS
+        Verification checks, live comparisons, incomplete actions, and residual inherited membership paths.
+
     .EXAMPLE
         $v = Test-ADOffboardingResult -Plan .\plan.json -Result $r -Config .\ADIdentityOps.json
     #>
@@ -41,6 +47,8 @@ function Test-ADOffboardingResult {
         $checks.Add([pscustomobject][ordered]@{ Name = $Name; Passed = [bool]$Passed; Detail = $Detail })
     }
 
+    # --- Verify result identity and capture current state ---
+    # The hash binds this result to plan content for comparison; it does not establish approval.
     $hashOk = $p.PSObject.Properties['Integrity'] -and ([string]$p.Integrity.Hash -ieq (Get-ADOffboardingPlanHash -Plan $p))
     & $addCheck 'PlanIntegrity' $hashOk 'Plan hash matches its content (modification check only).'
     & $addCheck 'ResultMatchesPlan' (([string]$r.PlanId -eq [string]$p.PlanId) -and ([string]$r.PlanHash -ieq [string]$p.Integrity.Hash)) 'Result PlanId and plan hash match the supplied plan.'
@@ -63,6 +71,8 @@ function Test-ADOffboardingResult {
         & $addCheck 'LiveIdentityMatch' (($snap.Target.ObjectGuid -ieq [string]$p.Target.ObjectGuid) -and ($snap.Target.Sid -ieq [string]$p.Target.Sid)) 'Live ObjectGUID and SID equal the plan target.'
         & $addCheck 'LiveSnapshotComplete' ([bool]$snap.Collection.IsComplete) $(if ($snap.Collection.IsComplete) { 'Live collection complete.' } else { 'Incomplete: ' + (@($snap.Collection.Errors) -join ' | ') })
 
+        # --- Compare intended changes with the live read ---
+        # A reported success is insufficient if the directory no longer has the intended state.
         $liveDirect = @($snap.DirectGroups | ForEach-Object { ConvertTo-NormalizedIdentifier -Value ([string]$_.ObjectGuid) })
         foreach ($a in @($p.Actions | Sort-Object { [int]$_.Order })) {
             $reported = [string](@($r.Actions | Where-Object { $_.ActionId -eq $a.ActionId } | Select-Object -First 1 | ForEach-Object { $_.Status }))
@@ -95,6 +105,8 @@ function Test-ADOffboardingResult {
                     Expected = "DirectMember[$($ex.Group.Name)]=True"; Observed = "DirectMember[$($ex.Group.Name)]=$still"; Verified = [bool]$still
                 })
         }
+        # A removed direct membership can still be inherited through another path. This is not an
+        # effective-access calculation and does not establish whether existing sessions have ended.
         $seen = @{}
         $residualUnique = foreach ($x in @($snap.NestedGroups)) { $k = [string]$x.ObjectGuid + '|' + (@($x.Path) -join '>'); if (-not $seen.ContainsKey($k)) { $seen[$k] = $true; $x } }
         $residual = @($residualUnique)

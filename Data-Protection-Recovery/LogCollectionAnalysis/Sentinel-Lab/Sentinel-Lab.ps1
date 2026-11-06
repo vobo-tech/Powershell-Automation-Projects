@@ -10,7 +10,9 @@
 # Sentinel-Lab
 # Failed RDP Logins. Converts source IP to full geolocation data.
 
+# --- Resolve runtime credential ---
 # Set IPGEOLOCATION_API_KEY in this process environment from an approved secret store.
+# The request URI contains the key, so request failure details are deliberately not logged.
 $API_KEY = $env:IPGEOLOCATION_API_KEY
 if ([string]::IsNullOrWhiteSpace($API_KEY)) {
     throw "Set IPGEOLOCATION_API_KEY in the process environment before running this script."
@@ -56,6 +58,8 @@ if ((Test-Path $LOGFILE_PATH) -eq $false) {
     write-Sample-Log
 }
 
+# --- Monitor failed-logon events and append enriched records ---
+# This loop is continuous; an operator must stop it when monitoring is no longer needed.
 # Infinite Loop that keeps checking the Event Viewer logs.
 while ($true)
 {

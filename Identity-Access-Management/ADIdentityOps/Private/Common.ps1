@@ -11,6 +11,7 @@ $script:ToolkitLimitations = @(
     'Execution authorization comes from Active Directory permissions and the organization change process, not from any field in the plan.'
 )
 
+# Obtain a single UTC time source for plan and result timestamps.
 function Get-UtcNow {
     [CmdletBinding()]
     [OutputType([datetime])]
@@ -18,6 +19,7 @@ function Get-UtcNow {
     [datetime]::UtcNow
 }
 
+# Format evidence timestamps consistently and independently of the host locale.
 function Get-UtcTimestamp {
     [CmdletBinding()]
     [OutputType([string])]
@@ -25,6 +27,7 @@ function Get-UtcTimestamp {
     $DateTime.ToUniversalTime().ToString("yyyy-MM-dd'T'HH:mm:ss.fffffff'Z'", [System.Globalization.CultureInfo]::InvariantCulture)
 }
 
+# Interpret saved timestamp values as UTC for expiry comparisons.
 function ConvertTo-UtcDateTime {
     [CmdletBinding()]
     [OutputType([datetime])]
@@ -35,6 +38,7 @@ function ConvertTo-UtcDateTime {
 }
 
 function Get-Sha256Hex {
+    # Hashing is an integrity comparison, not a signature or proof of authorization.
     [CmdletBinding()]
     [OutputType([string])]
     param([Parameter(Mandatory)][AllowEmptyString()][string]$Text)
@@ -46,6 +50,7 @@ function Get-Sha256Hex {
     finally { $sha.Dispose() }
 }
 
+# Escape a string deterministically for the canonical hash representation.
 function ConvertTo-CanonicalString {
     [CmdletBinding()]
     [OutputType([string])]
@@ -80,6 +85,7 @@ function ConvertTo-CanonicalJson {
     if ($InputObject -is [int] -or $InputObject -is [long] -or $InputObject -is [int16] -or $InputObject -is [byte] -or $InputObject -is [uint32] -or $InputObject -is [uint64]) {
         return [string]::Format([System.Globalization.CultureInfo]::InvariantCulture, '{0}', $InputObject)
     }
+    # Sort keys ordinally while retaining array order, so the same data hashes consistently.
     if ($InputObject -is [System.Collections.IDictionary]) {
         $keys = [string[]]@($InputObject.Keys | ForEach-Object { [string]$_ })
         [Array]::Sort($keys, [System.StringComparer]::Ordinal)
@@ -107,6 +113,7 @@ function Get-SanitizedText {
     [OutputType([string])]
     param([AllowNull()][AllowEmptyString()][string]$Text, [int]$MaxLength = 500)
     if ([string]::IsNullOrEmpty($Text)) { return '' }
+    # This is best-effort redaction of common assignment patterns, not a guarantee of secret removal.
     $clean = $Text -replace '[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]', ' '
     $clean = $clean -replace '(?i)\b(password|passwd|pwd|secret|token|bearer|api[-_]?key|credential)\b(\s*[=:]\s*|\s+)("[^"]*"|''[^'']*''|\S+)', '$1=[REDACTED]'
     if ($clean.Length -gt $MaxLength) { $clean = $clean.Substring(0, $MaxLength) + '...[truncated]' }
@@ -128,6 +135,7 @@ function Write-Utf8File {
     $full
 }
 
+# Load saved evidence while preserving date-like strings when PowerShell supports that option.
 function Read-JsonFile {
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]$Path)
@@ -139,6 +147,7 @@ function Read-JsonFile {
     $raw | ConvertFrom-Json
 }
 
+# Convert an optional AD identifier to trimmed text for portable evidence.
 function ConvertTo-IdString {
     [CmdletBinding()]
     [OutputType([string])]
@@ -164,6 +173,7 @@ function ConvertTo-NormalizedIdentifier {
     'name:' + $v.ToLowerInvariant()
 }
 
+# Classify a normalized identifier before allowing it in safety-sensitive configuration.
 function Get-IdentifierKind {
     [CmdletBinding()]
     [OutputType([string])]
@@ -190,6 +200,7 @@ function Test-IdentifierInList {
     $false
 }
 
+# Derive the parent DN while respecting escaped commas in a distinguished name.
 function Get-ParentDN {
     <#
     .SYNOPSIS
@@ -203,6 +214,7 @@ function Get-ParentDN {
     $m.Groups[1].Value
 }
 
+# Compare a DN with the configured OU boundary instead of matching an arbitrary text suffix.
 function Test-DnUnderOu {
     <#
     .SYNOPSIS
@@ -216,6 +228,7 @@ function Test-DnUnderOu {
     ($d -eq $o) -or $d.EndsWith(',' + $o)
 }
 
+# Reject date-like free text that could be converted during a JSON round trip and change the plan hash.
 function Assert-NoIsoDateLikeText {
     [CmdletBinding()]
     param([string]$Name, [string]$Value)

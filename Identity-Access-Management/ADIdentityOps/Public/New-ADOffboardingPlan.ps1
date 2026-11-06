@@ -1,3 +1,4 @@
+# Hash the plan content without the Integrity field, which stores the resulting hash.
 function Get-ADOffboardingPlanHash {
     [CmdletBinding()]
     [OutputType([string])]
@@ -8,7 +9,6 @@ function Get-ADOffboardingPlanHash {
 }
 
 function New-ADOffboardingPlan {
-    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification='Creates an in-memory object (and optionally a plan file); it never changes AD.')]
     <#
     .SYNOPSIS
         Creates a reviewable, serializable offboarding plan from a snapshot. Read-only: changes nothing in AD.
@@ -33,6 +33,18 @@ function New-ADOffboardingPlan {
     .PARAMETER Snapshot
         Output of Get-ADIdentitySnapshot.
 
+    .PARAMETER Config
+        Validated configuration object or path; eligibility is evaluated again against these settings.
+
+    .PARAMETER TicketReference
+        Change reference recorded as metadata, not an authorization decision.
+
+    .PARAMETER RequestedBy
+        Requester name recorded as metadata, not proof of approval.
+
+    .PARAMETER Reason
+        Optional free-text reason included in the plan.
+
     .PARAMETER RemoveGroup
         Direct groups to remove, as ObjectGUID, SID, or DN. Must match a direct membership.
 
@@ -42,10 +54,17 @@ function New-ADOffboardingPlan {
     .PARAMETER Path
         Optional JSON file to write the plan to.
 
+    .PARAMETER ExpiresInHours
+        Optional plan lifetime; otherwise the configuration's lifetime is used.
+
+    .OUTPUTS
+        A plan object, including eligibility, actions, exclusions, observed state, and an integrity hash.
+
     .EXAMPLE
         New-ADOffboardingPlan -Snapshot $snap -Config $cfgPath -TicketReference CHG-1001 -RequestedBy 'helpdesk-lead' `
             -RemoveGroup 'S-1-5-21-1-2-3-1201' -MoveToQuarantine -Path .\plan.json
     #>
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification='Creates an in-memory object (and optionally a plan file); it never changes AD.')]
     [CmdletBinding()]
     [OutputType([pscustomobject])]
     param(
@@ -60,6 +79,7 @@ function New-ADOffboardingPlan {
         [string]$Path
     )
 
+    # --- Validate configuration and snapshot ---
     $cfg = Resolve-ADIdentityConfig -Config $Config
     foreach ($req in 'SchemaVersion', 'SnapshotId', 'Target', 'DirectGroups', 'NestedGroups', 'Collection', 'DomainController') {
         if (-not $Snapshot.PSObject.Properties[$req]) { throw "Snapshot is missing '$req'. Provide the output of Get-ADIdentitySnapshot." }
@@ -98,6 +118,8 @@ function New-ADOffboardingPlan {
         $selected[(ConvertTo-NormalizedIdentifier -Value $hit[0].ObjectGuid)] = $hit[0]
     }
 
+    # --- Build the proposed changes without writing to AD ---
+    # Disabling is the prerequisite for removal and move; the other actions remain explicit choices.
     $actions = New-Object System.Collections.Generic.List[object]
     $exclusions = New-Object System.Collections.Generic.List[object]
     $warnings = New-Object System.Collections.Generic.List[string]
@@ -136,6 +158,7 @@ function New-ADOffboardingPlan {
         }
     }
 
+    # Preserve all nested paths as exclusions, not as removable direct memberships.
     $seen = @{}
     foreach ($ng in $nested) {
         $k = if ($ng.ObjectGuid) { $ng.ObjectGuid } else { $ng.DistinguishedName }
@@ -160,6 +183,7 @@ function New-ADOffboardingPlan {
             })
     }
 
+    # --- Preserve observations for drift checks and later review ---
     $hours = if ($PSBoundParameters.ContainsKey('ExpiresInHours')) { $ExpiresInHours } else { $cfg.PlanLifetimeHours }
     $now = Get-UtcNow
     $groupSnapshot = @($direct | ForEach-Object { [pscustomobject][ordered]@{ ObjectGuid = $_.ObjectGuid; Sid = $_.Sid; DistinguishedName = $_.DistinguishedName; Name = $_.Name } })
@@ -196,6 +220,7 @@ function New-ADOffboardingPlan {
         Warnings          = $warnings.ToArray()
         Limitations       = @($script:ToolkitLimitations)
     }
+    # The hash excludes its own Integrity field; it detects changed content but is not a signature.
     $plan | Add-Member -NotePropertyName Integrity -NotePropertyValue ([pscustomobject][ordered]@{
             Algorithm = 'SHA256'
             Hash      = (Get-ADOffboardingPlanHash -Plan $plan)

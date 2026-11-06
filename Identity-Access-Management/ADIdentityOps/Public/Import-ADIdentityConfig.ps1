@@ -9,6 +9,12 @@ function Import-ADIdentityConfig {
         See Config\ADIdentityOps.example.json. Use only synthetic values in examples; keep real
         configuration out of source control.
 
+    .PARAMETER Path
+        Path to the JSON configuration file.
+
+    .OUTPUTS
+        A validated configuration object with a recomputed security-settings fingerprint.
+
     .EXAMPLE
         $cfg = Import-ADIdentityConfig -Path .\ADIdentityOps.json
     #>

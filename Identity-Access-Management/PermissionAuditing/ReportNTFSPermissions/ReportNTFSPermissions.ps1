@@ -93,6 +93,7 @@ param(
 )
 
 begin {
+  # --- Prepare shared rights interpretation and partial-error reporting ---
   . (Join-Path (Split-Path -Path $PSScriptRoot -Parent) 'Shared/FileSystemRights.ps1')
   $script:ErrorCount = 0
   $script:ErrorLogPath = $ErrorLog
@@ -122,6 +123,7 @@ begin {
 }
 
 process {
+  # --- Enumerate requested paths and collect individual ACEs ---
   foreach ($root in $Path) {
     if (-not (Test-Path -LiteralPath $root)) {
       Write-Err "Path not found: $root"
@@ -161,6 +163,7 @@ process {
 
       $owner = $acl.Owner
 
+      # Each object is one ACE, not a calculation of the principal's effective access.
       foreach ($ace in $acl.Access) {
         $principal = Resolve-PrincipalName -IdentityReference $ace.IdentityReference -DoResolve:$ResolveSIDs.IsPresent
         $right     = Convert-FileSystemRightsLabel -Rights $ace.FileSystemRights

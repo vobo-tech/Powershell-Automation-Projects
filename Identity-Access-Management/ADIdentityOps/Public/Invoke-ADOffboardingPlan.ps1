@@ -31,8 +31,23 @@ function Invoke-ADOffboardingPlan {
     .PARAMETER ConfirmPlanId
         Must equal the plan's PlanId. Guards against executing the wrong plan file.
 
+    .PARAMETER Plan
+        In-memory plan object to execute or preview.
+
+    .PARAMETER PlanPath
+        Path to a plan JSON file instead of an in-memory object.
+
+    .PARAMETER Config
+        Configuration object or JSON path; its settings must match the plan fingerprint.
+
     .PARAMETER ResumeFrom
         A previous result object or path produced by this command for the same plan.
+
+    .PARAMETER ResultPath
+        Optional destination for execution evidence; WhatIf does not write a result file.
+
+    .OUTPUTS
+        A result object with preflight checks, per-action outcomes, attempt counts, and recovery evidence.
 
     .EXAMPLE
         Invoke-ADOffboardingPlan -PlanPath .\plan.json -Config .\ADIdentityOps.json -ConfirmPlanId $planId -WhatIf
@@ -52,6 +67,7 @@ function Invoke-ADOffboardingPlan {
         [string]$ResultPath
     )
 
+    # --- Validate configuration and target scope ---
     Assert-ADCommand
     $cfg = Resolve-ADIdentityConfig -Config $Config
     $p = Resolve-ADOffboardingPlanInput -Plan $Plan -PlanPath $PlanPath
@@ -72,6 +88,7 @@ function Invoke-ADOffboardingPlan {
         }
     }
 
+    # Live preflight permits only drift attributed to successful actions in the matching previous run.
     $carryover = if ($previous) { Get-ADOffboardingCarryover -Plan $p -PreviousResult $previous } else { $null }
     $pre = Invoke-ADOffboardingPreflight -Plan $p -Config $cfg -Live -Carryover $carryover
 
@@ -88,6 +105,7 @@ function Invoke-ADOffboardingPlan {
             Description = $a.Description; Intended = $a.Intended; Group = $a.Group
             Status = 'Planned'; Observed = $null; StartedUtc = $null; EndedUtc = $null; Attempts = 0; Error = $null; CarriedFromRunId = $null
         }
+        # Retain counts even for failed or blocked actions; only successful/compliant actions are carried.
         if ($previous) {
             $anyPrev = @($previous.Actions | Where-Object { $_.ActionId -eq $a.ActionId -and $_.Type -eq $a.Type }) | Select-Object -First 1
             if ($anyPrev) { $rec.Attempts = [int]$anyPrev.Attempts }
@@ -99,6 +117,7 @@ function Invoke-ADOffboardingPlan {
         $records.Add([pscustomobject]$rec)
     }
 
+    # Original state is manual recovery evidence, not an automatic rollback mechanism.
     $original = $null
     if ($previous -and $previous.PSObject.Properties['OriginalState']) { $original = $previous.OriginalState }
     elseif ($pre.LiveSnapshot) {
@@ -131,6 +150,8 @@ function Invoke-ADOffboardingPlan {
         Limitations      = @($script:ToolkitLimitations)
     }
 
+    # --- Preserve execution evidence ---
+    # Save after each action so a partial run has useful evidence; WhatIf does not write result files.
     $resultDestination = $ResultPath
     $save = {
         $result.Summary = Get-ADOffboardingResultSummary -Actions $result.Actions
@@ -143,6 +164,8 @@ function Invoke-ADOffboardingPlan {
 
     if (-not $pre.Passed) {
         $failed = @($pre.Checks | Where-Object { -not $_.Passed } | ForEach-Object { "$($_.Name): $($_.Detail)" })
+        # --- Execute eligible actions ---
+        # A failed prerequisite blocks dependent actions. WhatIf treats a planned prerequisite as previewable.
         foreach ($r in $result.Actions) {
             if ($okStates -notcontains $r.Status) { $r.Status = 'Blocked'; $r.Error = Get-SanitizedText -Text ('Preflight failed. ' + ($failed -join ' | ')) }
         }
@@ -173,6 +196,7 @@ function Invoke-ADOffboardingPlan {
         $r.StartedUtc = Get-UtcTimestamp
         $r.Attempts = [int]$r.Attempts + 1
         $planAction = @($planActions | Where-Object { $_.ActionId -eq $r.ActionId })[0]
+        # Pass the public cmdlet context so each actual write uses its ShouldProcess/-WhatIf decision.
         $o = Invoke-ADOffboardingAction -Action $planAction -Plan $p -Config $cfg -Cmdlet $PSCmdlet -WhatIfMode $whatIfMode
         $r.Status = $o.Status
         $r.Observed = $o.Observed

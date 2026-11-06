@@ -39,6 +39,8 @@ param(
     [int]$MonitoringInterval = 1
 )
 
+# --- Resolve runtime credential ---
+# Keep the key outside the script; the URI still contains it, so do not log request details.
 if ([string]::IsNullOrWhiteSpace($ApiKey)) {
     $ApiKey = $env:IPGEOLOCATION_API_KEY
 }
@@ -107,6 +109,8 @@ function New-SampleLogData {
 function Get-GeolocationData {
     param([string]$IPAddress)
     
+    # --- Request geolocation with bounded retries ---
+    # Request failures omit exception details because they may contain the credential-bearing URI.
     for ($attempt = 1; $attempt -le $MAX_RETRIES; $attempt++) {
         try {
             Write-LogMessage "Getting geolocation for IP: $IPAddress (Attempt $attempt/$MAX_RETRIES)" "DEBUG" "Cyan"

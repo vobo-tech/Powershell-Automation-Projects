@@ -78,6 +78,7 @@ param(
 )
 
 begin {
+  # --- Validate dependencies and input ---
   try {
     Import-Module ActiveDirectory -ErrorAction Stop
   } catch {
@@ -95,6 +96,8 @@ begin {
 }
 
 process {
+  # --- Process each requested account ---
+  # Each row produces its own outcome, so a downstream failure is not mistaken for full success.
   foreach ($row in $users) {
     # Required fields
     $sam   = $row.SamAccountName
@@ -173,6 +176,7 @@ process {
       continue
     }
 
+    # No creation means no later group or home-folder changes for this row, including under WhatIf.
     if (-not $PSCmdlet.ShouldProcess("AD User '$sam'", "Create")) {
       $result.Status = 'WhatIf'
       $result

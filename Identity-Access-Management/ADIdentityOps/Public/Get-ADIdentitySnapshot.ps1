@@ -24,6 +24,9 @@ function Get-ADIdentitySnapshot {
     .PARAMETER MaxNestingDepth
         Maximum group nesting depth to follow. Exceeding it marks the snapshot incomplete.
 
+    .OUTPUTS
+        A snapshot object with target identifiers, membership paths, protection, scope, and collection errors.
+
     .EXAMPLE
         $snap = Get-ADIdentitySnapshot -Identity 'a1b2c3d4-0000-0000-0000-000000000001' -Config .\ADIdentityOps.json
     #>
@@ -40,6 +43,8 @@ function Get-ADIdentitySnapshot {
         $server = $cfg.DomainController
         $errors = New-Object System.Collections.Generic.List[string]
 
+        # --- Capture current directory state ---
+        # GUID and SID let later checks detect a different object even if a name or DN is reused.
         $props = 'ObjectGUID', 'SID', 'DistinguishedName', 'SamAccountName', 'UserPrincipalName', 'Enabled', 'Department', 'Manager', 'MemberOf', 'AdminCount', 'PrimaryGroupID', 'ObjectClass'
         try { $u = Get-ADUser -Identity $Identity -Server $server -Properties $props -ErrorAction Stop }
         catch { throw "Unable to resolve identity on '$server': $(Get-SanitizedText -Text $_.Exception.Message)" }
@@ -50,6 +55,7 @@ function Get-ADIdentitySnapshot {
         $enabled = Get-ObjectProperty $u 'Enabled'
         if ($null -eq $enabled) { $errors.Add('Enabled state could not be read.') }
 
+        # Resolve each group once, but retain each distinct path through the group graph.
         $cache = @{}
         $getGroup = {
             param([string]$dn)
@@ -79,6 +85,8 @@ function Get-ADIdentitySnapshot {
         $nested = New-Object System.Collections.Generic.List[object]
         $queue = New-Object System.Collections.Queue
 
+        # --- Separate direct memberships from inherited paths ---
+        # Only direct memberOf entries can be selected for removal from this account.
         foreach ($gdn in @(@(Get-ObjectProperty $u 'MemberOf') | Where-Object { $_ })) {
             $info = & $getGroup ([string]$gdn)
             $path = @($userDn, [string]$gdn)
@@ -86,6 +94,7 @@ function Get-ADIdentitySnapshot {
             $queue.Enqueue([pscustomobject]@{ Info = $info; Path = $path })
         }
 
+        # Bound breadth and depth and avoid cycles within a path; a limit makes collection incomplete.
         $maxPaths = 2000
         $stop = $false
         while ($queue.Count -gt 0 -and -not $stop) {
@@ -127,6 +136,8 @@ function Get-ADIdentitySnapshot {
 
         $directArr = $direct.ToArray()
         $nestedArr = $nested.ToArray()
+        # --- Evaluate protection and scope ---
+        # These are observations for planning; live preflight checks them again before execution.
         $protection = Get-ADProtectionMatch -Target $target -DirectGroups $directArr -NestedGroups $nestedArr -Config $cfg
         $inScope = $false
         foreach ($ou in $cfg.AllowedSourceOUs) { if ($userDn -and (Test-DnUnderOu -Dn $userDn -OuDn $ou)) { $inScope = $true } }

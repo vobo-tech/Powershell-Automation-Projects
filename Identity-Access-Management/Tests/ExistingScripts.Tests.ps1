@@ -11,6 +11,7 @@ param()
 # All AD and ACL commands are stand-ins/mocks over synthetic data; nothing touches a domain or a real ACL.
 
 BeforeAll {
+    # Bind release-related scripts and replace AD/ACL commands with local stand-ins for Pester mocks.
     $script:IamRoot = Split-Path -Path $PSScriptRoot -Parent
     $script:NtfsScript = Join-Path $script:IamRoot 'PermissionAuditing/ReportNTFSPermissions/ReportNTFSPermissions.ps1'
     $script:OverPermScript = Join-Path $script:IamRoot 'PermissionAuditing/DetectOverPermissionedAccounts/DetectOverPermissionedAccounts.ps1'
@@ -55,6 +56,7 @@ BeforeAll {
 }
 
 Describe 'FileSystemRights helper (composite bitmask regression)' {
+    # Composite enum values overlap, so a single shared bit must not count as a full right.
     It 'labels <Rights> as <Expected>' -ForEach @(
         @{ Rights = 'FullControl'; Expected = 'FullControl' }
         @{ Rights = 'Modify'; Expected = 'Modify' }
@@ -167,6 +169,7 @@ Describe 'DetectOverPermissionedAccounts.ps1' {
 }
 
 Describe 'BulkUserCreation.ps1' {
+    # The mocked cases distinguish a newly created account from an existing or failed lookup.
     BeforeEach {
         $script:Csv = Join-Path $TestDrive ([guid]::NewGuid().ToString('N') + '.csv')
         $script:Pw = New-Object System.Security.SecureString

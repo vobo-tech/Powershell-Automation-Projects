@@ -1,3 +1,6 @@
+# --- Re-read and execute individual actions ---
+# The public executor owns ordering and preflight; these helpers perform and verify one action at a time.
+# Read the current account state by GUID from the configured controller.
 function Get-ADLiveAccountState {
     [CmdletBinding()]
     [OutputType([pscustomobject])]
@@ -13,6 +16,7 @@ function Get-ADLiveAccountState {
     }
 }
 
+# Resolve the group GUID to its current DN before checking the user's direct memberOf entries.
 function Test-ADLiveDirectMember {
     [CmdletBinding()]
     [OutputType([bool])]
@@ -23,12 +27,12 @@ function Test-ADLiveDirectMember {
 }
 
 function Invoke-ADOffboardingAction {
-    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSShouldProcess', '', Justification='ShouldProcess is delegated to the calling public cmdlet via the $Cmdlet parameter so -WhatIf/-Confirm apply to the caller.')]
     <#
     .SYNOPSIS
         Executes (or previews) one planned action and verifies the outcome by re-reading AD.
         All AD writes live here, each guarded by ShouldProcess.
     #>
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSShouldProcess', '', Justification='ShouldProcess is delegated to the calling public cmdlet via the $Cmdlet parameter so -WhatIf/-Confirm apply to the caller.')]
     [CmdletBinding()]
     [OutputType([pscustomobject])]
     param(
@@ -44,6 +48,8 @@ function Invoke-ADOffboardingAction {
     $out = [ordered]@{ Status = 'Failed'; Observed = $null; Error = $null }
     $declined = if ($WhatIfMode) { 'Planned' } else { 'Skipped' }
 
+    # Read before each action, including previews. The caller's ShouldProcess gates every AD write;
+    # direct cmdlet dispatch also lets the synthetic adapter replace AD commands during tests.
     try {
         $before = Get-ADLiveAccountState -Guid $guid -Server $server
         switch ($Action.Type) {
@@ -97,6 +103,7 @@ function Invoke-ADOffboardingAction {
         }
     }
     catch {
+        # Report a failed action instead of hiding a partial run or implying a successful write.
         $out.Status = 'Failed'
         $out.Error = Get-SanitizedText -Text $_.Exception.Message
     }
@@ -104,6 +111,10 @@ function Invoke-ADOffboardingAction {
 }
 
 function Get-ADOffboardingResultSummary {
+    <#
+    .SYNOPSIS
+        Counts action outcomes and identifies work that has not succeeded or become compliant.
+    #>
     [CmdletBinding()]
     param([Parameter(Mandatory)][object[]]$Actions)
     $counts = [ordered]@{}

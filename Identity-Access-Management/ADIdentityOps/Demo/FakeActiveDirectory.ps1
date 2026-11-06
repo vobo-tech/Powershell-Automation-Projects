@@ -12,6 +12,8 @@ param()
 
 $global:FakeDomainSid = 'S-1-5-21-1111111111-2222222222-3333333333'
 
+# --- Construct isolated synthetic directory state ---
+# The logs and fault switches allow tests to distinguish reads, attempted writes, and no-effect writes.
 function global:Reset-FakeAD {
     $global:FakeAD = @{
         Users        = @{}
@@ -26,6 +28,7 @@ function global:Reset-FakeAD {
     }
 }
 
+# The fixture builders populate only local objects; their identifiers and names are fabricated.
 function global:Add-FakeOU { param([string]$Dn) [void]$global:FakeAD.OUs.Add($Dn) }
 
 function global:Add-FakeGroup {
@@ -51,6 +54,7 @@ function global:Add-FakeUser {
     $dn
 }
 
+# Resolve fixture identities using the forms accepted by the simulated read commands.
 function global:Find-FakeUser {
     param([string]$Identity)
     foreach ($u in $global:FakeAD.Users.Values) {
@@ -67,6 +71,7 @@ function global:Find-FakeGroup {
     $null
 }
 
+# Reject reads or writes that omit the explicit controller; record the selected server for assertions.
 function global:Assert-FakeServer {
     param([string]$Server)
     if ([string]::IsNullOrWhiteSpace($Server)) { throw 'FakeAD: -Server was not specified (the toolkit must always target the configured DC).' }
@@ -75,11 +80,14 @@ function global:Assert-FakeServer {
 
 function global:Copy-FakeObject {
     param($Source)
+    # Return a copy so a module read cannot silently mutate the adapter's stored membership list.
     $c = $Source.PSObject.Copy()
     if ($c.PSObject.Properties['MemberOf']) { $c.MemberOf = @($Source.MemberOf) }
     $c
 }
 
+# --- Provide cmdlet-compatible read operations ---
+# Global functions are resolved by the imported module in place of real ActiveDirectory commands.
 function global:Get-ADUser {
     [CmdletBinding()]
     param([string]$Identity, [string]$Filter, [string]$Server, [string[]]$Properties)
@@ -96,6 +104,7 @@ function global:Get-ADUser {
     Copy-FakeObject $u
 }
 
+# Resolve parent memberOf links so the real snapshot code can walk nested group paths.
 function global:Get-ADGroup {
     [CmdletBinding()]
     param([string]$Identity, [string]$Server, [string[]]$Properties)
@@ -107,6 +116,7 @@ function global:Get-ADGroup {
     Copy-FakeObject $g
 }
 
+# Make quarantine OU existence checks use the synthetic OU list.
 function global:Get-ADOrganizationalUnit {
     [CmdletBinding()]
     param([string]$Identity, [string]$Server)
@@ -115,6 +125,8 @@ function global:Get-ADOrganizationalUnit {
     [pscustomobject]@{ DistinguishedName = $Identity }
 }
 
+# --- Simulate and record writes ---
+# These stand-ins intentionally do not apply ShouldProcess themselves: any unexpected call must be visible.
 function global:Disable-ADAccount {
     [CmdletBinding(SupportsShouldProcess)]
     param([string]$Identity, [string]$Server)
@@ -127,6 +139,7 @@ function global:Disable-ADAccount {
     $u.Enabled = $false
 }
 
+# Remove only the direct user-to-group link; other nested paths are left intact.
 function global:Remove-ADGroupMember {
     [CmdletBinding(SupportsShouldProcess)]
     param([string]$Identity, [string[]]$Members, [string]$Server)
@@ -142,6 +155,7 @@ function global:Remove-ADGroupMember {
     $u.MemberOf = [System.Collections.ArrayList]@($keep)
 }
 
+# Change the fixture's DN to simulate the account moving to an existing synthetic OU.
 function global:Move-ADObject {
     [CmdletBinding(SupportsShouldProcess)]
     param([string]$Identity, [string]$TargetPath, [string]$Server)
@@ -177,6 +191,7 @@ function global:Set-ADUser {
     [void]$global:FakeAD.WriteLog.Add("Set-ADUser $Identity")
 }
 
+# --- Build the reproducible scenario ---
 function global:Initialize-SyntheticDirectory {
     <#
     .SYNOPSIS
@@ -201,6 +216,7 @@ function global:Initialize-SyntheticDirectory {
     $null = Add-FakeUser -Sam 'contractor1' -Rid 3003 -Guid '11111111-0000-0000-0000-000000003003' -Ou "OU=Contractors,OU=Corp,$base" -Cn 'Contractor One' -MemberOf @((& $g 'GG-All-Staff'))
 }
 
+# Supply safety boundaries and output paths that refer only to the fixture and local evidence.
 function global:New-SyntheticConfig {
     [pscustomobject]@{
         SchemaVersion          = '1.0'
@@ -215,6 +231,7 @@ function global:New-SyntheticConfig {
     }
 }
 
+# Remove the stand-in commands after the scenario so they do not leak into the host session.
 function global:Remove-FakeAD {
     foreach ($f in 'Reset-FakeAD', 'Add-FakeOU', 'Add-FakeGroup', 'Add-FakeUser', 'Find-FakeUser', 'Find-FakeGroup', 'Assert-FakeServer', 'Copy-FakeObject', 'Get-ADUser', 'Get-ADGroup', 'Get-ADOrganizationalUnit', 'Disable-ADAccount', 'Remove-ADGroupMember', 'Move-ADObject', 'New-ADUser', 'Add-ADGroupMember', 'Set-ADUser', 'Initialize-SyntheticDirectory', 'New-SyntheticConfig') {
         Remove-Item -Path "function:global:$f" -ErrorAction Ignore

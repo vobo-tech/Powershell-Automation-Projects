@@ -51,6 +51,7 @@ param(
 )
 
 begin {
+  # --- Prepare a scoped candidate search ---
   # Helper lives inside begin{}: a script that mixes top-level functions with begin/process/end blocks does not parse as intended.
   function Convert-LLTToDate {
     param([long]$LLT)
@@ -75,6 +76,8 @@ begin {
 }
 
 process {
+  # --- Collect candidates ---
+  # Replicated lastLogonTimestamp is approximate; a candidate requires independent review.
   try {
     $users = Get-ADUser @getParams
   } catch {
@@ -104,6 +107,8 @@ process {
 }
 
 end {
+  # --- Apply requested remediation and return evidence ---
+  # A failed disable blocks the requested move; statuses and errors remain on each result object.
   if ($Disable -or $MoveToOU) {
     foreach ($r in $results) {
       $errs = New-Object System.Collections.Generic.List[string]

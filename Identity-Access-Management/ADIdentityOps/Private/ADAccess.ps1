@@ -1,3 +1,5 @@
+# --- Directory access helpers ---
+# Public workflow commands use these wrappers to tolerate unset AD attributes and surface read failures.
 function Get-ObjectProperty {
     <#
     .SYNOPSIS
@@ -30,6 +32,10 @@ function Assert-ADCommand {
 }
 
 function Get-ADGroupInfo {
+    <#
+    .SYNOPSIS
+        Resolves a group and its parent memberships, or returns an unresolved record with a sanitized error.
+    #>
     [CmdletBinding()]
     [OutputType([pscustomobject])]
     param([Parameter(Mandatory)][string]$Identity, [Parameter(Mandatory)][string]$Server)
@@ -46,6 +52,7 @@ function Get-ADGroupInfo {
         }
     }
     catch {
+        # Preserve the failed lookup as evidence; an unresolved group makes snapshot collection incomplete.
         [pscustomobject][ordered]@{
             Resolved          = $false
             ObjectGuid        = $null
@@ -59,6 +66,10 @@ function Get-ADGroupInfo {
 }
 
 function Get-ADProtectionMatch {
+    <#
+    .SYNOPSIS
+        Evaluates the target and its direct and inherited groups against configured protection rules.
+    #>
     [CmdletBinding()]
     [OutputType([pscustomobject])]
     param([Parameter(Mandatory)]$Target, [AllowEmptyCollection()][object[]]$DirectGroups, [AllowEmptyCollection()][object[]]$NestedGroups, [Parameter(Mandatory)]$Config)
@@ -67,6 +78,7 @@ function Get-ADProtectionMatch {
     if (Test-IdentifierInList -Candidate @($Target.ObjectGuid, $Target.Sid, $Target.DistinguishedName) -List $Config.ProtectedAccounts) {
         $found.Add([pscustomobject][ordered]@{ Kind = 'ProtectedAccount'; Detail = 'Target matches a configured protected account identifier.'; Membership = $null; Path = @() })
     }
+    # adminCount can persist after privileged membership ends; treat that uncertainty conservatively.
     if ($null -ne $Target.AdminCount -and [int]$Target.AdminCount -eq 1) {
         $found.Add([pscustomobject][ordered]@{ Kind = 'AdminCount'; Detail = 'adminCount=1 (current or former protected-group member); treated as protected.'; Membership = $null; Path = @() })
     }

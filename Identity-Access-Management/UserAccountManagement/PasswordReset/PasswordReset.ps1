@@ -54,6 +54,7 @@ param(
 )
 
 begin {
+  # --- Prepare requested identities and password source ---
   # Helper lives inside begin{}: a script that mixes top-level functions with begin/process/end blocks does not parse as intended.
   function New-RandomPassword {
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification='Generates a string in memory only; changes nothing.')]
@@ -82,6 +83,8 @@ begin {
 }
 
 process {
+  # --- Reset and record follow-up outcomes ---
+  # Generated plaintext is returned to the caller and can be exported; protect both channels as secrets.
   foreach ($item in $items) {
     $id = $item.Identity
     if (-not $id) { Write-Warning "Row missing Identity; skipping."; continue }

@@ -3,6 +3,7 @@ param()
 
 Describe 'Invoke-SyntheticDemo.ps1' {
     It 'runs end to end in a separate process, passes its own self-checks, and writes JSON, CSV, and HTML evidence' {
+        # A separate PowerShell process isolates the adapter's global stand-ins from the Pester host.
         $demo = Join-Path (Split-Path -Path $PSScriptRoot -Parent) 'Demo/Invoke-SyntheticDemo.ps1'
         $out = Join-Path $TestDrive 'demo'
         New-Item -ItemType Directory -Path $out -Force | Out-Null
@@ -15,6 +16,7 @@ Describe 'Invoke-SyntheticDemo.ps1' {
         $log | Should -Not -Match 'self-check failed'
         (Get-Content -Path $sentinel -Raw).Trim() | Should -Be 'preserve existing caller data'
 
+        # Existing caller data must survive, and each required evidence format must be produced.
         $runDirectory = Get-ChildItem -Path $out -Directory -Filter 'run-*' | Select-Object -First 1
         $reports = Join-Path $runDirectory.FullName 'reports'
         @(Get-ChildItem -Path $reports -Filter '*.json').Count | Should -Be 1

@@ -45,12 +45,15 @@ function Write-DemoStep {
     Write-DemoLine "=== $Title ==="
 }
 
+# Fail the demonstration if a safety or evidence expectation is not met.
 function Assert-Demo {
     param([bool]$Condition, [string]$Message)
     if (-not $Condition) { throw "Demo self-check failed: $Message" }
     Write-DemoLine "  [check ok] $Message"
 }
 
+# --- Prepare isolated evidence and substitute the in-memory AD adapter ---
+# Load the adapter before importing the real module so AD command names resolve to the stand-ins.
 $outputRoot = [System.IO.Path]::GetFullPath($OutputDirectory)
 New-Item -ItemType Directory -Path $outputRoot -Force | Out-Null
 $runName = 'run-{0}-{1}' -f (Get-Date).ToUniversalTime().ToString("yyyyMMdd'T'HHmmssfff'Z'"), ([guid]::NewGuid().ToString('N').Substring(0, 8))
@@ -73,6 +76,8 @@ try {
 
     Write-DemoLine '*** SIMULATED DEMO: synthetic in-memory directory; no domain, no real identities, no AD changes. ***'
 
+    # --- Discover and evaluate safety boundaries ---
+    # The fake write log makes the read-only and protected-account assertions observable.
     Write-DemoStep '1. Read-only snapshots'
     $snap = Get-ADIdentitySnapshot -Identity 'jdoe' -Config $cfg
     $adminSnap = Get-ADIdentitySnapshot -Identity 'adm-ops' -Config $cfg
@@ -90,6 +95,8 @@ try {
     Assert-Demo ($blocked.Status -eq 'Blocked') 'execution for the protected account is Blocked'
     Assert-Demo ($global:FakeAD.WriteLog.Count -eq 0) 'blocked run performed zero AD writes'
 
+    # --- Plan and preview ---
+    # Excluded and unselected direct groups remain, and WhatIf must not call a fake write cmdlet.
     Write-DemoStep '3. Plan for the ordinary employee (explicit group selection)'
     $planPath = Join-Path $OutputDirectory 'plans/jdoe-plan.json'
     $plan = New-ADOffboardingPlan -Snapshot $snap -Config $cfg -TicketReference 'CHG-DEMO-1' -RequestedBy 'demo-operator' `
@@ -104,6 +111,8 @@ try {
     Write-DemoLine ("WhatIf status: {0}; AD write calls: {1}" -f $whatIf.Status, $global:FakeAD.WriteLog.Count)
     Assert-Demo ($global:FakeAD.WriteLog.Count -eq 0) '-WhatIf performed zero AD writes'
 
+    # --- Exercise partial failure and resume ---
+    # The injected error changes only fake state; verification must not pass the partial run.
     Write-DemoStep '4b. Execute with an injected (simulated) failure removing GG-Project-Atlas'
     $global:FakeAD.FailWrite['RemoveGroup:GG-Project-Atlas'] = 'Access is denied. (SIMULATED failure)'
     $run1 = Invoke-ADOffboardingPlan -PlanPath $planPath -Config $cfg -ConfirmPlanId $plan.PlanId -Confirm:$false -WarningAction SilentlyContinue
@@ -124,6 +133,8 @@ try {
     Assert-Demo ($run2.Status -eq 'Succeeded') 'resume completed the plan'
     Assert-Demo (@($newWrites | Where-Object { $_ -like 'Disable-ADAccount*' }).Count -eq 0) 'resume did not repeat the already-successful disable'
 
+    # --- Verify remaining paths and export evidence ---
+    # Nested membership paths are observations, not proof of effective access or session termination.
     Write-DemoStep '6. Verification and before/after evidence'
     $verify2 = Test-ADOffboardingResult -Plan $plan -Result $run2 -Config $cfg
     Write-DemoLine ("Verification passed: {0}" -f $verify2.Passed)

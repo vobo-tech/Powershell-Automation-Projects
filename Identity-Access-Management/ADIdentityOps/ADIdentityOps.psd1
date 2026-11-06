@@ -1,3 +1,5 @@
+# --- Module identity and public surface ---
+# The declared 5.1 minimum is a compatibility target, not evidence that 5.1 has been tested.
 @{
     RootModule            = 'ADIdentityOps.psm1'
     ModuleVersion         = '0.1.0'
@@ -6,6 +8,7 @@
     Description           = 'AD Identity Operations Toolkit (pre-release): read-only identity snapshots, reviewable offboarding plans, controlled execution, verification, and evidence reports.'
     PowerShellVersion     = '5.1'
     CompatiblePSEditions  = @('Desktop', 'Core')
+    # Keep implementation helpers private; these commands form the supported workflow.
     FunctionsToExport     = @(
         'Import-ADIdentityConfig'
         'Get-ADIdentitySnapshot'

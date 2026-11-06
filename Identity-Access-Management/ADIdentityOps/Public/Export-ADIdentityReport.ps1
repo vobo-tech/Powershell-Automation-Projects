@@ -11,6 +11,7 @@ function ConvertTo-CsvSafeText {
     $s
 }
 
+# Encode values before inserting them into HTML rather than interpreting them as markup.
 function ConvertTo-HtmlText {
     [CmdletBinding()]
     [OutputType([string])]
@@ -19,6 +20,7 @@ function ConvertTo-HtmlText {
     [System.Net.WebUtility]::HtmlEncode([string]$Value)
 }
 
+# Render headers and cells with HTML encoding, including an explicit empty-state message.
 function ConvertTo-HtmlTable {
     [CmdletBinding()]
     [OutputType([string])]
@@ -45,7 +47,8 @@ function Export-ADIdentityReport {
     .DESCRIPTION
         Untrusted values (names, DNs, error text, request metadata) are HTML-encoded in the HTML report
         and neutralized against spreadsheet formula injection in the CSV. The HTML contains no scripts
-        or external resources. Reports never contain credentials; error text is sanitized at capture time.
+        or external resources. Captured error text is sanitized on a best-effort basis; callers must not
+        supply credentials in report objects or labels and should protect the resulting evidence files.
 
     .PARAMETER Plan
         Plan object (required).
@@ -61,6 +64,15 @@ function Export-ADIdentityReport {
 
     .PARAMETER Label
         Banner text shown at the top of the HTML report, e.g. to mark simulated data.
+
+    .PARAMETER Config
+        Optional configuration used to select the report directory when OutputDirectory is omitted.
+
+    .PARAMETER OutputDirectory
+        Directory to receive the three evidence files.
+
+    .OUTPUTS
+        An object identifying the generated report paths, or no object when ShouldProcess declines.
 
     .EXAMPLE
         Export-ADIdentityReport -Plan $plan -Result $r -Verification $v -Snapshot $before -OutputDirectory .\reports
@@ -89,7 +101,8 @@ function Export-ADIdentityReport {
     $csvPath = Join-Path $OutputDirectory "$base-actions.csv"
     $htmlPath = Join-Path $OutputDirectory "$base.html"
 
-    # Action summary rows (shared by CSV and HTML).
+    # --- Assemble action evidence ---
+    # Match each plan action to its reported and independently verified status when supplied.
     $rows = foreach ($a in @($Plan.Actions)) {
         $res = $null; $ver = $null
         if ($Result) { $res = @($Result.Actions | Where-Object { $_.ActionId -eq $a.ActionId }) | Select-Object -First 1 }
@@ -110,6 +123,7 @@ function Export-ADIdentityReport {
     }
     $rows = @($rows)
 
+    # WhatIf must stop before JSON, CSV, or HTML files are created.
     if (-not $PSCmdlet.ShouldProcess($OutputDirectory, 'Write identity report files')) { return $null }
 
     $report = [ordered]@{
@@ -123,6 +137,8 @@ function Export-ADIdentityReport {
     }
     [void](Write-Utf8File -Path $jsonPath -Content (ConvertTo-Json -InputObject ([pscustomobject]$report) -Depth 16))
 
+    # --- Encode each output for its consumer ---
+    # CSV cells may be opened in spreadsheets; neutralize formula prefixes before CSV quoting.
     $safeRows = foreach ($row in $rows) {
         $o = [ordered]@{}
         foreach ($pr in $row.PSObject.Properties) { $o[$pr.Name] = ConvertTo-CsvSafeText $pr.Value }
@@ -131,7 +147,8 @@ function Export-ADIdentityReport {
     $csv = if (@($safeRows).Count -gt 0) { (@($safeRows) | ConvertTo-Csv -NoTypeInformation) -join "`r`n" } else { '"PlanId"' }
     [void](Write-Utf8File -Path $csvPath -Content $csv)
 
-    # ---- HTML -----------------------------------------------------------------------------------
+    # --- Build self-contained HTML ---
+    # Encode dynamic text and use a restrictive content-security policy; do not treat names as markup.
     $h = New-Object System.Text.StringBuilder
     $e = { param($v) ConvertTo-HtmlText $v }
     [void]$h.AppendLine('<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">')

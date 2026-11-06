@@ -110,6 +110,7 @@ param(
 )
 
 begin {
+  # --- Prepare rights classification and error reporting ---
   . (Join-Path (Split-Path -Path $PSScriptRoot -Parent) 'Shared/FileSystemRights.ps1')
   $script:ErrorCount = 0
 
@@ -169,6 +170,7 @@ begin {
     param([string]$Principal,[string]$Domain)
     # Returns @{ Status; Users } for a group principal. Status is explicit so a failed lookup is never
     # reported as "no members": NotAGroup | Expanded | Failed:<reason>
+    # Group expansion supplies possible membership context, not a complete Windows access token.
     try {
       Import-Module ActiveDirectory -ErrorAction Stop | Out-Null
       $dc = @{}
@@ -193,6 +195,8 @@ begin {
 }
 
 process {
+  # --- Inventory candidate ACEs ---
+  # Filters and thresholds identify potential exposure; they do not evaluate effective access.
   foreach ($root in $Path) {
     if (-not (Test-Path -LiteralPath $root)) { Write-ScanError "Path not found: $root"; continue }
 

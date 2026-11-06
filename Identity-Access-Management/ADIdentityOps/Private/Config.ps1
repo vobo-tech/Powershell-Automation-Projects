@@ -1,3 +1,6 @@
+# --- Validate the operator's safety boundaries ---
+# Invalid or ambiguous configuration blocks planning and execution rather than widening scope.
+# Return all detected schema and safety-boundary errors for the caller to report together.
 function Test-ADIdentityConfigObject {
     [CmdletBinding()]
     [OutputType([string[]])]
@@ -36,6 +39,7 @@ function Test-ADIdentityConfigObject {
         }
     }
 
+    # GUIDs, SIDs, and DNs identify objects more reliably than reusable or ambiguous display names.
     foreach ($key in 'ProtectedAccounts', 'ProtectedGroups', 'GroupRemovalExclusions') {
         foreach ($v in @($Config.$key)) {
             $kind = Get-IdentifierKind -Value ([string]$v)
@@ -59,9 +63,16 @@ function Test-ADIdentityConfigObject {
 }
 
 function Get-ADIdentityConfigFingerprint {
+    <#
+    .SYNOPSIS
+        Hashes normalized security-relevant settings for comparison with a plan.
+    .DESCRIPTION
+        Output paths and plan lifetime are not in the fingerprint. This hash is not an approval signature.
+    #>
     [CmdletBinding()]
     [OutputType([string])]
     param([Parameter(Mandatory)]$Config)
+    # Sort and deduplicate identifier lists so ordering alone does not create configuration drift.
     $norm = {
         param($list)
         $items = @(@($list) | ForEach-Object { ConvertTo-NormalizedIdentifier -Value ([string]$_) } | Sort-Object -Unique)
@@ -92,6 +103,7 @@ function Resolve-ADIdentityConfig {
     if ($Config -is [string]) { $raw = Read-JsonFile -Path $Config }
     elseif ($null -eq $Config -or $Config -isnot [psobject]) { throw 'Config must be a path or a configuration object.' }
 
+    # Recompute the fingerprint even for an already materialized object; do not trust a supplied value.
     $problems = @(Test-ADIdentityConfigObject -Config $raw)
     if ($problems.Count -gt 0) { throw ("Invalid AD identity configuration:`n - " + ($problems -join "`n - ")) }
 
