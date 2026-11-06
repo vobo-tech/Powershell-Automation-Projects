@@ -5,6 +5,7 @@ on:
     branches: [ master, develop, 'feature/**' ]
   pull_request:
     branches: [ master ]
+  workflow_dispatch:
 
 jobs:
   test:
@@ -29,6 +30,12 @@ jobs:
         $baseSha = '${{ github.event.pull_request.base.sha || github.event.before }}'
         $headSha = '${{ github.sha }}'
         if ([string]::IsNullOrWhiteSpace($baseSha) -or $baseSha -match '^0+$') {
+          $defaultBranch = '${{ github.event.repository.default_branch }}'
+          $defaultRef = "origin/$defaultBranch"
+          $baseSha = git merge-base $defaultRef $headSha
+          if ($LASTEXITCODE -ne 0) { $baseSha = '' }
+        }
+        if ([string]::IsNullOrWhiteSpace($baseSha)) {
           $changedPaths = @(git ls-files)
         }
         else {
