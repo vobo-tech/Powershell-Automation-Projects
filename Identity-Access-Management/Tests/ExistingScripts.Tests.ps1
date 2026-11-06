@@ -65,6 +65,9 @@ Describe 'FileSystemRights helper (composite bitmask regression)' {
         @{ Rights = 'Delete'; Expected = 'Delete' }
     ) {
         Convert-FileSystemRightsLabel -Rights ([System.Security.AccessControl.FileSystemRights]$Rights) | Should -Be $Expected
+        if ($Rights -eq 'ReadData') {
+            Convert-FileSystemRightsLabel -Rights ([System.Security.AccessControl.FileSystemRights]::ListDirectory) | Should -Be 'ReadData'
+        }
     }
 
     It 'documents the old defect: an any-bit test treats a read-only ACE as FullControl' {

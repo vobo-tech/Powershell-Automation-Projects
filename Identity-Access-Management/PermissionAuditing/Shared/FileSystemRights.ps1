@@ -36,5 +36,6 @@ function Convert-FileSystemRightsLabel {
     if (Test-FileSystemRight -Rights $Rights -Required $fsr::Write)          { return 'Write' }
     if (Test-FileSystemRight -Rights $Rights -Required $fsr::ReadAndExecute) { return 'ReadExecute' }
     if (Test-FileSystemRight -Rights $Rights -Required $fsr::Read)           { return 'Read' }
+    if ($Rights -eq $fsr::ReadData) { return 'ReadData' }
     return $Rights.ToString()
 }
