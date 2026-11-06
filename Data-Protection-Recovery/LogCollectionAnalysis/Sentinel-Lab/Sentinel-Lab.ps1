@@ -69,47 +69,47 @@ while ($true)
 
     # Step through each event collected, get geolocation
     #    for the IP Address, and add new events to the custom log
-    foreach ($event in $events) {
+    foreach ($securityEvent in $events) {
 
 
-        # $event.properties[19] is the source IP address of the failed logon
+        # $securityEvent.properties[19] is the source IP address of the failed logon
         # This if-statement will proceed if the IP address exists (>= 5 is arbitrary, just saying if it's not empty)
-        if ($event.properties[19].Value.Length -ge 5) {
+        if ($securityEvent.properties[19].Value.Length -ge 5) {
 
             # Pick out fields from the event. These will be inserted into our new custom log
-            $timestamp = $event.TimeCreated
-            $year = $event.TimeCreated.Year
+            $timestamp = $securityEvent.TimeCreated
+            $year = $securityEvent.TimeCreated.Year
             
-            $month = $event.TimeCreated.Month
-            if ("$($event.TimeCreated.Month)".Length -eq 1) {
-                $month = "0$($event.TimeCreated.Month)"
+            $month = $securityEvent.TimeCreated.Month
+            if ("$($securityEvent.TimeCreated.Month)".Length -eq 1) {
+                $month = "0$($securityEvent.TimeCreated.Month)"
             }
 
-            $day = $event.TimeCreated.Day
-            if ("$($event.TimeCreated.Day)".Length -eq 1) {
-                $day = "0$($event.TimeCreated.Day)"
+            $day = $securityEvent.TimeCreated.Day
+            if ("$($securityEvent.TimeCreated.Day)".Length -eq 1) {
+                $day = "0$($securityEvent.TimeCreated.Day)"
             }
             
-            $hour = $event.TimeCreated.Hour
-            if ("$($event.TimeCreated.Hour)".Length -eq 1) {
-                $hour = "0$($event.TimeCreated.Hour)"
+            $hour = $securityEvent.TimeCreated.Hour
+            if ("$($securityEvent.TimeCreated.Hour)".Length -eq 1) {
+                $hour = "0$($securityEvent.TimeCreated.Hour)"
             }
 
-            $minute = $event.TimeCreated.Minute
-            if ("$($event.TimeCreated.Minute)".Length -eq 1) {
-                $minute = "0$($event.TimeCreated.Minute)"
+            $minute = $securityEvent.TimeCreated.Minute
+            if ("$($securityEvent.TimeCreated.Minute)".Length -eq 1) {
+                $minute = "0$($securityEvent.TimeCreated.Minute)"
             }
 
 
-            $second = $event.TimeCreated.Second
-            if ("$($event.TimeCreated.Second)".Length -eq 1) {
-                $second = "0$($event.TimeCreated.Second)"
+            $second = $securityEvent.TimeCreated.Second
+            if ("$($securityEvent.TimeCreated.Second)".Length -eq 1) {
+                $second = "0$($securityEvent.TimeCreated.Second)"
             }
 
             $timestamp = "$($year)-$($month)-$($day) $($hour):$($minute):$($second)"
-            $destinationHost = $event.MachineName# Workstation Name (Destination)
-            $username = $event.properties[5].Value # Account Name (Attempted Logon)
-            $sourceIp = $event.properties[19].Value # IP Address
+            $destinationHost = $securityEvent.MachineName# Workstation Name (Destination)
+            $username = $securityEvent.properties[5].Value # Account Name (Attempted Logon)
+            $sourceIp = $securityEvent.properties[19].Value # IP Address
         
 
             # Get the current contents of the Log file!
