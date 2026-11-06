@@ -54,13 +54,16 @@ This script creates a comprehensive security monitoring solution that:
 
 ### Setup
 1. **Get API Key**: Register at [ipgeolocation.io](https://ipgeolocation.io/) and obtain your API key
-2. **Update Script**: Replace the API key in the script with your personal key
+2. **Configure Runtime Secret**: Set `IPGEOLOCATION_API_KEY` in the script process environment through an approved secret store or secure launcher. Never put the key in either script, source control, or a command-line literal.
 3. **Set Permissions**: Ensure script runs with administrator privileges
 
 ### Execution
 ```powershell
-# Run the script
+# Run after securely configuring IPGEOLOCATION_API_KEY in this process
 .\Sentinel-Lab.ps1
+
+# The enhanced variant also accepts the environment variable, or an explicitly supplied runtime parameter.
+.\Enhanced-Sentinel-Lab.ps1 -ApiKey $env:IPGEOLOCATION_API_KEY
 
 # The script will:
 # 1. Create log file at C:\ProgramData\failed_rdp.log
@@ -68,6 +71,9 @@ This script creates a comprehensive security monitoring solution that:
 # 3. Begin monitoring for failed RDP attempts
 # 4. Process and log geolocation data for each event
 ```
+
+Both scripts require a runtime key and stop before monitoring if it is missing. Request error details are intentionally
+suppressed because the provider API accepts its key in the request URI.
 
 ## 📁 Output Format
 
@@ -92,6 +98,11 @@ latitude:40.71455,longitude:-74.00714,destinationhost:DESKTOP-PC,username:admin,
 - **Rate Limiting**: Script includes delays to prevent API rate limiting
 - **Log File Security**: Ensure log file permissions are appropriately restricted
 - **Network Security**: Monitor for suspicious patterns in failed login attempts
+
+The previously embedded API key has been removed from the current scripts. Treat any previously committed key as
+exposed: revoke or rotate it with the provider, review usage/billing logs, and update the approved runtime secret source.
+Changing the current files does not remove copies from Git history, other branches, forks, or downloaded artifacts.
+Review those locations after revocation; coordinate any history rewrite with repository owners and collaborators.
 
 ## 🏗️ Azure Sentinel Integration
 

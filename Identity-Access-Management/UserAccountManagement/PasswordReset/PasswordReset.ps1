@@ -1,4 +1,4 @@
-# ██████╗░██╗░░░██╗███████╗███████╗  ███╗░░██╗███████╗██████╗░██████╗░
+﻿# ██████╗░██╗░░░██╗███████╗███████╗  ███╗░░██╗███████╗██████╗░██████╗░
 # ██╔══██╗██║░░░██║██╔════╝██╔════╝  ████╗░██║██╔════╝██╔══██╗██╔══██╗
 # ██████╦╝██║░░░██║█████╗░░█████╗░░  ██╔██╗██║█████╗░░██████╔╝██║░░██║
 # ██╔══██╗██║░░░██║██╔══╝░░██╔══╝░░  ██║╚████║██╔══╝░░██╔══██╗██║░░██║
@@ -27,6 +27,7 @@
   PS> .\PasswordReset.ps1 -Identity alice,bob -NewPassword (Read-Host "New" -AsSecureString) -ForceChangeAtLogon -Verbose -WhatIf
   PS> .\PasswordReset.ps1 -CsvPath .\reset.csv -GenerateRandom -ExportCsv .\reset-out.csv -Unlock
 #>
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingConvertToSecureStringWithPlainText', '', Justification='Existing behavior: converts a generated or CSV-supplied password to SecureString for Set-ADAccountPassword. See ADIdentityOps README for the migration path.')]
 [CmdletBinding(SupportsShouldProcess = $true)]
 param(
   [Parameter(ParameterSetName='Direct', Mandatory=$false)]
@@ -52,14 +53,17 @@ param(
   [string]$ExportCsv  # When generating random passwords, export results here (plain text password)
 )
 
-function New-RandomPassword {
-  param([int]$Length = 16)
-  # Simple strong generator; customize for your policy
-  $chars = (33..126) | ForEach-Object {[char]$_} | Where-Object { $_ -notin @('"','`','\') }
-  -join (1..$Length | ForEach-Object { $chars | Get-Random })
-}
-
 begin {
+  # Helper lives inside begin{}: a script that mixes top-level functions with begin/process/end blocks does not parse as intended.
+  function New-RandomPassword {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification='Generates a string in memory only; changes nothing.')]
+    [CmdletBinding()]
+    param([int]$Length = 16)
+    # Simple strong generator; customize for your policy
+    $chars = (33..126) | ForEach-Object {[char]$_} | Where-Object { $_ -notin @('"','`','\') }
+    -join (1..$Length | ForEach-Object { $chars | Get-Random })
+  }
+
   try { Import-Module ActiveDirectory -ErrorAction Stop } catch { throw "Missing ActiveDirectory module." }
 
   $items = @()
@@ -96,29 +100,33 @@ process {
     }
 
     if ($PSCmdlet.ShouldProcess("AD User '$id'", "Reset password")) {
+      $unlocked = $false; $forced = $false; $errs = New-Object System.Collections.Generic.List[string]
+      $changed = $false
       try {
         Set-ADAccountPassword -Identity $id -NewPassword $pwdSecure -Reset -ErrorAction Stop
-        if ($Unlock) { Unlock-ADAccount -Identity $id -ErrorAction SilentlyContinue }
-        if ($ForceChangeAtLogon) { Set-ADUser -Identity $id -ChangePasswordAtLogon $true -ErrorAction SilentlyContinue }
-
-        $results.Add([pscustomobject]@{
-          Identity   = $id
-          Password   = $pwdPlain  # null if not generated/known
-          Changed    = $true
-          ForcedCPW  = [bool]$ForceChangeAtLogon
-          Unlocked   = [bool]$Unlock
-        })
+        $changed = $true
         Write-Verbose "Password reset for '$id'."
       } catch {
-        Write-Error "Failed to reset '$id': $($_.Exception.Message)"
-        $results.Add([pscustomobject]@{
-          Identity   = $id
-          Password   = $pwdPlain
-          Changed    = $false
-          ForcedCPW  = [bool]$ForceChangeAtLogon
-          Unlocked   = [bool]$Unlock
-        })
+        $errs.Add("Failed to reset '$id': $($_.Exception.Message)")
       }
+      # Follow-up steps are only attempted after a successful reset, and their failures are reported, not suppressed
+      if ($changed -and $Unlock) {
+        try { Unlock-ADAccount -Identity $id -ErrorAction Stop; $unlocked = $true }
+        catch { $errs.Add("Password reset for '$id' succeeded but unlock failed: $($_.Exception.Message)") }
+      }
+      if ($changed -and $ForceChangeAtLogon) {
+        try { Set-ADUser -Identity $id -ChangePasswordAtLogon $true -ErrorAction Stop; $forced = $true }
+        catch { $errs.Add("Password reset for '$id' succeeded but ChangePasswordAtLogon failed: $($_.Exception.Message)") }
+      }
+      foreach ($e in $errs) { Write-Error $e }
+      $results.Add([pscustomobject]@{
+        Identity   = $id
+        Password   = $pwdPlain  # null if not generated/known
+        Changed    = $changed
+        ForcedCPW  = $forced    # true only if the change was actually applied
+        Unlocked   = $unlocked  # true only if the unlock was actually applied
+        Errors     = $errs.ToArray()
+      })
     }
   }
 }
@@ -126,11 +134,13 @@ process {
 end {
   if ($ExportCsv) {
     try {
-      $results | Export-Csv -Path $ExportCsv -NoTypeInformation
+      $results | Select-Object * -ExcludeProperty Errors | Export-Csv -Path $ExportCsv -NoTypeInformation -ErrorAction Stop
       Write-Verbose "Results exported to '$ExportCsv'."
     } catch {
-      Write-Warning "Failed to export results: $($_.Exception.Message)"
+      Write-Error "Failed to export results: $($_.Exception.Message)"
     }
   }
-  $results | Format-Table -AutoSize
+  # Objects are emitted (no Format-Table). NOTE: -GenerateRandom passwords appear in this output and in
+  # -ExportCsv; treat both as secrets. See the ADIdentityOps README for the migration guidance.
+  $results
 }

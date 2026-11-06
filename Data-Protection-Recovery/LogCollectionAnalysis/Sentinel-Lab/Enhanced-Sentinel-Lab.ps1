@@ -1,4 +1,4 @@
-# ██████╗░██╗░░░██╗███████╗███████╗  ███╗░░██╗███████╗██████╗░██████╗░
+﻿# ██████╗░██╗░░░██╗███████╗███████╗  ███╗░░██╗███████╗██████╗░██████╗░
 # ██╔══██╗██║░░░██║██╔════╝██╔════╝  ████╗░██║██╔════╝██╔══██╗██╔══██╗
 # ██████╦╝██║░░░██║█████╗░░█████╗░░  ██╔██╗██║█████╗░░██████╔╝██║░░██║
 # ██╔══██╗██║░░░██║██╔══╝░░██╔══╝░░  ██║╚████║██╔══╝░░██╔══██╗██║░░██║
@@ -14,13 +14,13 @@
     Monitors failed RDP login attempts with geolocation data for Azure Sentinel SIEM.
     Includes enhanced error handling, security features, and professional logging.
 .PARAMETER ApiKey
-    API key for ipgeolocation.io service (optional, can be set in script)
+    API key for ipgeolocation.io service. If omitted, IPGEOLOCATION_API_KEY must be set in the process environment.
 .PARAMETER LogPath
     Custom path for log file (default: C:\ProgramData\failed_rdp.log)
 .PARAMETER MonitoringInterval
     Interval in seconds between event checks (default: 1)
 .EXAMPLE
-    .\Enhanced-Sentinel-Lab.ps1 -ApiKey "your-api-key" -LogPath "C:\Logs\sentinel.log"
+    .\Enhanced-Sentinel-Lab.ps1 -ApiKey $env:IPGEOLOCATION_API_KEY -LogPath "C:\Logs\sentinel.log"
 .NOTES
     Author: PowerShell Automation Portfolio
     Requires: Administrator privileges, Internet connection
@@ -30,7 +30,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory=$false)]
-    [string]$ApiKey = "b5e6872004b24a7e8feffbf4d5b4a2e4",  # Replace with your API key
+    [string]$ApiKey,
     
     [Parameter(Mandatory=$false)]
     [string]$LogPath = "C:\ProgramData\failed_rdp.log",
@@ -38,6 +38,13 @@ param(
     [Parameter(Mandatory=$false)]
     [int]$MonitoringInterval = 1
 )
+
+if ([string]::IsNullOrWhiteSpace($ApiKey)) {
+    $ApiKey = $env:IPGEOLOCATION_API_KEY
+}
+if ([string]::IsNullOrWhiteSpace($ApiKey)) {
+    throw "Provide -ApiKey or set IPGEOLOCATION_API_KEY in the process environment."
+}
 
 # Configuration
 $API_ENDPOINT_BASE = "https://api.ipgeolocation.io/ipgeo"
@@ -66,7 +73,7 @@ function Write-LogMessage {
     $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
     $logEntry = "[$timestamp] [$Level] $Message"
     
-    Write-Host $logEntry -ForegroundColor $Color
+    Write-Information -MessageData $logEntry -Tags $Color.ToString() -InformationAction Continue
     
     # Optional: Write to system log
     # Write-EventLog -LogName Application -Source "SentinelLab" -EntryType Information -EventId 1001 -Message $logEntry
@@ -74,21 +81,26 @@ function Write-LogMessage {
 
 # Function to create sample training data
 function New-SampleLogData {
+    [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'Low')]
+    param()
+
     Write-LogMessage "Creating sample training data..." "INFO" "Yellow"
-    
-    $sampleData = @(
-        "latitude:47.91542,longitude:-120.60306,destinationhost:samplehost,username:fakeuser,sourcehost:24.16.97.222,state:Washington,country:United States,label:United States - 24.16.97.222,timestamp:2021-10-26 03:28:29",
-        "latitude:-22.90906,longitude:-47.06455,destinationhost:samplehost,username:lnwbaq,sourcehost:20.195.228.49,state:Sao Paulo,country:Brazil,label:Brazil - 20.195.228.49,timestamp:2021-10-26 05:46:20",
-        "latitude:52.37022,longitude:4.89517,destinationhost:samplehost,username:CSNYDER,sourcehost:89.248.165.74,state:North Holland,country:Netherlands,label:Netherlands - 89.248.165.74,timestamp:2021-10-26 06:12:56",
-        "latitude:40.71455,longitude:-74.00714,destinationhost:samplehost,username:ADMINISTRATOR,sourcehost:72.45.247.218,state:New York,country:United States,label:United States - 72.45.247.218,timestamp:2021-10-26 10:44:07",
-        "latitude:33.99762,longitude:-6.84737,destinationhost:samplehost,username:AZUREUSER,sourcehost:102.50.242.216,state:Rabat-Salé-Kénitra,country:Morocco,label:Morocco - 102.50.242.216,timestamp:2021-10-26 11:03:13"
-    )
-    
-    foreach ($entry in $sampleData) {
-        $entry | Out-File $LogPath -Append -Encoding utf8
+
+    if ($PSCmdlet.ShouldProcess($LogPath, "Append synthetic sample data")) {
+        $sampleData = @(
+            "latitude:47.91542,longitude:-120.60306,destinationhost:samplehost,username:fakeuser,sourcehost:24.16.97.222,state:Washington,country:United States,label:United States - 24.16.97.222,timestamp:2021-10-26 03:28:29",
+            "latitude:-22.90906,longitude:-47.06455,destinationhost:samplehost,username:lnwbaq,sourcehost:20.195.228.49,state:Sao Paulo,country:Brazil,label:Brazil - 20.195.228.49,timestamp:2021-10-26 05:46:20",
+            "latitude:52.37022,longitude:4.89517,destinationhost:samplehost,username:CSNYDER,sourcehost:89.248.165.74,state:North Holland,country:Netherlands,label:Netherlands - 89.248.165.74,timestamp:2021-10-26 06:12:56",
+            "latitude:40.71455,longitude:-74.00714,destinationhost:samplehost,username:ADMINISTRATOR,sourcehost:72.45.247.218,state:New York,country:United States,label:United States - 72.45.247.218,timestamp:2021-10-26 10:44:07",
+            "latitude:33.99762,longitude:-6.84737,destinationhost:samplehost,username:AZUREUSER,sourcehost:102.50.242.216,state:Rabat-Salé-Kénitra,country:Morocco,label:Morocco - 102.50.242.216,timestamp:2021-10-26 11:03:13"
+        )
+
+        foreach ($entry in $sampleData) {
+            $entry | Out-File $LogPath -Append -Encoding utf8
+        }
+
+        Write-LogMessage "Sample data created successfully" "INFO" "Green"
     }
-    
-    Write-LogMessage "Sample data created successfully" "INFO" "Green"
 }
 
 # Function to get geolocation data with error handling
@@ -98,8 +110,7 @@ function Get-GeolocationData {
     for ($attempt = 1; $attempt -le $MAX_RETRIES; $attempt++) {
         try {
             Write-LogMessage "Getting geolocation for IP: $IPAddress (Attempt $attempt/$MAX_RETRIES)" "DEBUG" "Cyan"
-            
-            $apiUrl = "$API_ENDPOINT_BASE?apiKey=$ApiKey&ip=$IPAddress"
+            $apiUrl = '{0}?apiKey={1}' -f $API_ENDPOINT_BASE, [uri]::EscapeDataString($ApiKey)
             $response = Invoke-WebRequest -UseBasicParsing -Uri $apiUrl -TimeoutSec 10
             
             if ($response.StatusCode -eq 200) {
@@ -116,7 +127,7 @@ function Get-GeolocationData {
             }
         }
         catch {
-            Write-LogMessage "API request failed (Attempt $attempt): $($_.Exception.Message)" "WARN" "Yellow"
+            Write-LogMessage "API request failed (Attempt $attempt); response details suppressed to protect the API key." "WARN" "Yellow"
             
             if ($attempt -lt $MAX_RETRIES) {
                 Start-Sleep -Seconds ($RATE_LIMIT_DELAY * $attempt)

@@ -2,9 +2,9 @@ name: PowerShell CI/CD
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [ master, develop, 'feature/**' ]
   pull_request:
-    branches: [ main ]
+    branches: [ master ]
 
 jobs:
   test:
@@ -12,6 +12,8 @@ jobs:
     
     steps:
     - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
     
     - name: Setup PowerShell
       shell: pwsh
@@ -24,29 +26,68 @@ jobs:
       shell: pwsh
       run: |
         $results = @()
-        Get-ChildItem -Path . -Include "*.ps1","*.psm1","*.psd1" -Recurse | ForEach-Object {
-          $analysis = Invoke-ScriptAnalyzer -Path $_.FullName -Severity Warning,Error
-          if ($analysis) {
-            $results += $analysis
-            Write-Host "Issues found in $($_.Name):" -ForegroundColor Yellow
-            $analysis | Format-Table -AutoSize
-          }
+        $baseSha = '${{ github.event.pull_request.base.sha || github.event.before }}'
+        $headSha = '${{ github.sha }}'
+        if ([string]::IsNullOrWhiteSpace($baseSha) -or $baseSha -match '^0+$') {
+          $changedPaths = @(git ls-files)
         }
-        
+        else {
+          $changedPaths = @(git diff --name-only $baseSha $headSha)
+          if ($LASTEXITCODE -ne 0) { throw "Unable to determine changed files for PSScriptAnalyzer." }
+        }
+
+        # Limit lint to changed PowerShell files; the untouched portfolio has legacy analyzer findings.
+        $scriptFiles = @(
+          foreach ($path in $changedPaths) {
+            if ([System.IO.Path]::GetExtension($path) -in @(".ps1", ".psm1", ".psd1") -and (Test-Path -LiteralPath $path -PathType Leaf)) {
+              Get-Item -LiteralPath $path
+            }
+          }
+        )
+        Write-Host "PSScriptAnalyzer discovered $($scriptFiles.Count) changed PowerShell file(s)."
+        foreach ($scriptFile in $scriptFiles) {
+          $results += Invoke-ScriptAnalyzer -Path $scriptFile.FullName -Severity Warning,Error
+        }
         if ($results.Count -gt 0) {
-          Write-Host "❌ PSScriptAnalyzer found $($results.Count) issues" -ForegroundColor Red
+          Write-Host "PSScriptAnalyzer found $($results.Count) issue(s):" -ForegroundColor Red
+          $results | Format-Table RuleName,Severity,ScriptName,Line,Message -Wrap -AutoSize
           exit 1
-        } else {
-          Write-Host "✅ PSScriptAnalyzer passed with no issues" -ForegroundColor Green
+        }
+        if ($scriptFiles.Count -eq 0) {
+          Write-Host "No changed PowerShell files; PSScriptAnalyzer skipped."
+        }
+        else {
+          Write-Host "PSScriptAnalyzer passed." -ForegroundColor Green
         }
     
     - name: Run Pester Tests
       shell: pwsh
       run: |
+        # Discover every *.Tests.ps1 and fail if discovery is empty or incomplete.
+        $expectedFiles = @(
+          @{ Path = 'Identity-Access-Management/ADIdentityOps/Tests/ADIdentityOps.Tests.ps1'; MinimumTests = 49 },
+          @{ Path = 'Identity-Access-Management/ADIdentityOps/Tests/SyntheticDemo.Tests.ps1'; MinimumTests = 1 },
+          @{ Path = 'Identity-Access-Management/Tests/ExistingScripts.Tests.ps1'; MinimumTests = 27 }
+        )
+        $found = @(Get-ChildItem -Path . -Filter '*.Tests.ps1' -Recurse -File)
+        Write-Host "Discovered $($found.Count) test file(s):"
+        $found | ForEach-Object { Write-Host "  $($_.FullName)" }
+        $minimumTestsByPath = @{}
+        foreach ($expected in $expectedFiles) {
+          if (-not (Test-Path -LiteralPath $expected.Path)) { Write-Host "❌ Missing expected test file: $($expected.Path)" -ForegroundColor Red; exit 1 }
+          $expectedFullPath = (Resolve-Path -LiteralPath $expected.Path).Path
+          if ($found.FullName -notcontains $expectedFullPath) { Write-Host "❌ Not discovered: $($expected.Path)" -ForegroundColor Red; exit 1 }
+          $minimumTestsByPath[$expectedFullPath] = $expected.MinimumTests
+        }
         $testResults = @()
-        Get-ChildItem -Path . -Include "*.tests.ps1" -Recurse | ForEach-Object {
-          $result = Invoke-Pester -Path $_.FullName -PassThru
-          $testResults += $result
+        foreach ($file in $found) {
+          $fileResult = Invoke-Pester -Path $file.FullName -PassThru
+          $testResults += $fileResult
+          Write-Host "  $($file.Name): $($fileResult.TotalCount) test(s)"
+          if ($minimumTestsByPath.ContainsKey($file.FullName) -and $fileResult.TotalCount -lt $minimumTestsByPath[$file.FullName]) {
+            Write-Host "❌ $($file.Name) ran $($fileResult.TotalCount) tests; expected at least $($minimumTestsByPath[$file.FullName])" -ForegroundColor Red
+            exit 1
+          }
         }
         
         $totalTests = ($testResults | Measure-Object -Property TotalCount -Sum).Sum
@@ -58,6 +99,11 @@ jobs:
         Write-Host "  Passed: $passedTests" -ForegroundColor Green
         Write-Host "  Failed: $failedTests" -ForegroundColor Red
         
+        $minimumTests = ($expectedFiles | Measure-Object -Property MinimumTests -Sum).Sum
+        if ($totalTests -lt $minimumTests) {
+          Write-Host "❌ Only $totalTests tests discovered; expected at least $minimumTests" -ForegroundColor Red
+          exit 1
+        }
         if ($failedTests -gt 0) {
           Write-Host "❌ Tests failed" -ForegroundColor Red
           exit 1
@@ -94,18 +140,21 @@ jobs:
         
         # Check for hardcoded credentials or sensitive data
         $patterns = @(
-          'password\s*=\s*["\'].*["\']',
-          'username\s*=\s*["\'].*["\']',
-          'secret\s*=\s*["\'].*["\']',
-          'apikey\s*=\s*["\'].*["\']',
-          'connectionstring\s*=\s*["\'].*["\']'
+          'password\s*=\s*["''].*["'']',
+          'username\s*=\s*["''].*["'']',
+          'secret\s*=\s*["''].*["'']',
+          'apikey\s*=\s*["''].*["'']',
+          'connectionstring\s*=\s*["''].*["'']'
         )
         
-        Get-ChildItem -Path . -Include "*.ps1","*.psm1","*.psd1" -Recurse | ForEach-Object {
-          $content = Get-Content $_.FullName -Raw
+        $scriptFiles = @(Get-ChildItem -Path . -Recurse -File | Where-Object { $_.Extension -in @(".ps1", ".psm1", ".psd1") })
+        if ($scriptFiles.Count -eq 0) { throw "Credential scan discovered no PowerShell files." }
+        Write-Host "Credential scan discovered $($scriptFiles.Count) PowerShell file(s)."
+        foreach ($scriptFile in $scriptFiles) {
+          $content = Get-Content $scriptFile.FullName -Raw
           foreach ($pattern in $patterns) {
             if ($content -match $pattern) {
-              $securityIssues += "Potential credential in $($_.Name): $($matches[0])"
+              $securityIssues += "Potential credential-like value in $($scriptFile.Name) matched a configured pattern."
             }
           }
         }

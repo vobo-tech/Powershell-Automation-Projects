@@ -7,7 +7,11 @@
     - Principal (resolved SID), Rights, AccessControlType (Allow/Deny), Inheritance, IsInherited
     - Flags potential risks: broad principals with high rights, Deny ACEs, disabled inheritance,
       unresolved SIDs, and unusual owners.
-  Outputs flattened rows for analysis. Designed to run with least surprises in large trees.
+  Outputs flattened rows (objects, not formatted text) for analysis. Each row describes ONE ACE; it does not
+  evaluate Deny precedence, group membership, share permissions, or any other condition needed to establish
+  a principal's effective access.
+  Enumeration/ACL errors are reported as non-terminating errors and a final warning; they are not hidden.
+  Designed to run with least surprises in large trees.
 
 .PARAMETER Path
   One or more root paths to scan (e.g., 'D:\Shares\Finance', '\\fs01\Projects').
@@ -89,16 +93,9 @@ param(
 )
 
 begin {
-  function Convert-Rights {
-    param([System.Security.AccessControl.FileSystemRights]$Rights)
-    # Map the bitmask to a simplified label for quick scanning
-    if ($Rights -band [System.Security.AccessControl.FileSystemRights]::FullControl) { return 'FullControl' }
-    if ($Rights -band [System.Security.AccessControl.FileSystemRights]::Modify)      { return 'Modify' }
-    if ($Rights -band [System.Security.AccessControl.FileSystemRights]::Write)       { return 'Write' }
-    if ($Rights -band [System.Security.AccessControl.FileSystemRights]::ReadAndExecute){ return 'ReadExecute' }
-    if ($Rights -band [System.Security.AccessControl.FileSystemRights]::Read)        { return 'Read' }
-    return $Rights.ToString()
-  }
+  . (Join-Path (Split-Path -Path $PSScriptRoot -Parent) 'Shared/FileSystemRights.ps1')
+  $script:ErrorCount = 0
+  $script:ErrorLogPath = $ErrorLog
 
   function Resolve-PrincipalName {
     param($IdentityReference, [switch]$DoResolve)
@@ -112,8 +109,13 @@ begin {
 
   function Write-Err {
     param([string]$Msg)
-    if ($ErrorLog) { try { "[$(Get-Date -Format s)] $Msg" | Out-File -FilePath $ErrorLog -Append -Encoding utf8 } catch {} }
-    Write-Verbose $Msg
+    $script:ErrorCount++
+    if ($script:ErrorLogPath) {
+      try { "[$(Get-Date -Format s)] $Msg" | Out-File -FilePath $script:ErrorLogPath -Append -Encoding utf8 -ErrorAction Stop }
+      catch { Write-Warning "Could not write to ErrorLog '$script:ErrorLogPath': $($_.Exception.Message)" }
+    }
+    # Non-terminating error: visible in $Error / -ErrorVariable, never silently dropped
+    Write-Error -Message $Msg
   }
 
   $rows = New-Object System.Collections.Generic.List[Object]
@@ -121,7 +123,7 @@ begin {
 
 process {
   foreach ($root in $Path) {
-    if (-not (Test-Path $root)) {
+    if (-not (Test-Path -LiteralPath $root)) {
       Write-Err "Path not found: $root"
       continue
     }
@@ -130,18 +132,14 @@ process {
     $targets = @($root)
     if ($Recurse) {
       try {
-        $enumParams = @{
-          Path        = $root
-          Directory   = $true
-          Recurse     = $true
-          ErrorAction = 'SilentlyContinue'
-        }
-        $dirs = Get-ChildItem @enumParams | Where-Object { $_.PSIsContainer }
+        $enumErrors = @()
+        $dirs = @(Get-ChildItem -LiteralPath $root -Directory -Recurse -ErrorAction SilentlyContinue -ErrorVariable +enumErrors)
         if ($IncludeFiles) {
-          $files = Get-ChildItem -Path $root -File -Recurse -ErrorAction SilentlyContinue
+          $files = @(Get-ChildItem -LiteralPath $root -File -Recurse -ErrorAction SilentlyContinue -ErrorVariable +enumErrors)
           $targets += $files.FullName
         }
         $targets += $dirs.FullName
+        foreach ($e in $enumErrors) { Write-Err "Enumeration error under $root : $($e.Exception.Message)" }
       } catch {
         Write-Err "Enumeration failed at $root : $($_.Exception.Message)"
       }
@@ -162,11 +160,10 @@ process {
       }
 
       $owner = $acl.Owner
-      $inheritanceDisabled = -not $acl.AreAccessRulesProtected
 
       foreach ($ace in $acl.Access) {
         $principal = Resolve-PrincipalName -IdentityReference $ace.IdentityReference -DoResolve:$ResolveSIDs.IsPresent
-        $right     = Convert-Rights -Rights $ace.FileSystemRights
+        $right     = Convert-FileSystemRightsLabel -Rights $ace.FileSystemRights
         $isDeny    = ($ace.AccessControlType -eq 'Deny')
         $broadHigh = ($BroadPrincipals -contains $principal.Split('\')[-1]) -and ($HighRights -contains $right)
 
@@ -183,6 +180,7 @@ process {
           Risk_BroadHigh   = $broadHigh
           Risk_Deny        = $isDeny
           Risk_Unresolved  = ($principal -match '^S-\d-\d+') # unresolved SID shows as S-1-...
+          Caveat           = 'Single-ACE inventory row; not an effective-access determination. Deny precedence, share permissions, group membership, and token/application policy are not evaluated.'
         })
       }
 
@@ -201,6 +199,7 @@ process {
           Risk_BroadHigh   = $false
           Risk_Deny        = $false
           Risk_Unresolved  = $true
+          Caveat           = 'Owner inventory row; it does not determine effective access.'
         })
       }
     }
@@ -211,12 +210,16 @@ end {
   $out = $rows | Sort-Object Path, Principal, Rights
 
   if ($OutputCsv) {
-    try { $out | Export-Csv -Path $OutputCsv -NoTypeInformation -Encoding UTF8 } catch { Write-Warning "CSV export failed: $($_.Exception.Message)" }
+    try { $out | Export-Csv -Path $OutputCsv -NoTypeInformation -Encoding UTF8 -ErrorAction Stop } catch { Write-Error "CSV export failed: $($_.Exception.Message)"; $script:ErrorCount++ }
   }
   if ($OutputJsonl) {
-    try { $out | ForEach-Object { $_ | ConvertTo-Json -Depth 6 -Compress } | Out-File -FilePath $OutputJsonl -Encoding UTF8 } catch { Write-Warning "JSONL export failed: $($_.Exception.Message)" }
+    try { $out | ForEach-Object { $_ | ConvertTo-Json -Depth 6 -Compress } | Out-File -FilePath $OutputJsonl -Encoding UTF8 -ErrorAction Stop } catch { Write-Error "JSONL export failed: $($_.Exception.Message)"; $script:ErrorCount++ }
   }
 
-  $out | Select-Object Path,Owner,Principal,Rights,AccessType,IsInherited,InheritanceOn,Risk_BroadHigh,Risk_Deny,Risk_Unresolved |
-    Format-Table -AutoSize
+  if ($script:ErrorCount -gt 0) {
+    Write-Warning "$($script:ErrorCount) error(s) occurred during the scan. The results are INCOMPLETE; see the error stream and -ErrorLog."
+  }
+
+  # Objects are emitted to the pipeline (no Format-Table) so callers can filter, export, or test them.
+  $out | Select-Object Path,Owner,Principal,Rights,AccessType,IsInherited,InheritanceOn,Risk_BroadHigh,Risk_Deny,Risk_Unresolved,Caveat
 }

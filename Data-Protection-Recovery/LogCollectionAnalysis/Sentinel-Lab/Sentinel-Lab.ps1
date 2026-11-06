@@ -1,4 +1,4 @@
-# ██████╗░██╗░░░██╗███████╗███████╗  ███╗░░██╗███████╗██████╗░██████╗░
+﻿# ██████╗░██╗░░░██╗███████╗███████╗  ███╗░░██╗███████╗██████╗░██████╗░
 # ██╔══██╗██║░░░██║██╔════╝██╔════╝  ████╗░██║██╔════╝██╔══██╗██╔══██╗
 # ██████╦╝██║░░░██║█████╗░░█████╗░░  ██╔██╗██║█████╗░░██████╔╝██║░░██║
 # ██╔══██╗██║░░░██║██╔══╝░░██╔══╝░░  ██║╚████║██╔══╝░░██╔══██╗██║░░██║
@@ -10,8 +10,11 @@
 # Sentinel-Lab
 # Failed RDP Logins. Converts source IP to full geolocation data.
 
-# Get API key from here: https://ipgeolocation.io/
-$API_KEY      = "b5e6872004b24a7e8feffbf4d5b4a2e4"
+# Set IPGEOLOCATION_API_KEY in this process environment from an approved secret store.
+$API_KEY = $env:IPGEOLOCATION_API_KEY
+if ([string]::IsNullOrWhiteSpace($API_KEY)) {
+    throw "Set IPGEOLOCATION_API_KEY in the process environment before running this script."
+}
 $LOGFILE_NAME = "failed_rdp.log"
 $LOGFILE_PATH = "C:\ProgramData\$($LOGFILE_NAME)"
 
@@ -104,10 +107,8 @@ while ($true)
             }
 
             $timestamp = "$($year)-$($month)-$($day) $($hour):$($minute):$($second)"
-            $eventId = $event.Id
             $destinationHost = $event.MachineName# Workstation Name (Destination)
             $username = $event.properties[5].Value # Account Name (Attempted Logon)
-            $sourceHost = $event.properties[11].Value # Workstation Name (Source)
             $sourceIp = $event.properties[19].Value # IP Address
         
 
@@ -124,8 +125,14 @@ while ($true)
 
                 # Make web request to the geolocation API
                 # For more info: https://ipgeolocation.io/documentation/ip-geolocation-api.html
-                $API_ENDPOINT = "https://api.ipgeolocation.io/ipgeo?apiKey=$($API_KEY)&ip=$($sourceIp)"
-                $response = Invoke-WebRequest -UseBasicParsing -Uri $API_ENDPOINT
+                $API_ENDPOINT = "https://api.ipgeolocation.io/ipgeo?apiKey=$([uri]::EscapeDataString($API_KEY))"
+                try {
+                    $response = Invoke-WebRequest -UseBasicParsing -Uri $API_ENDPOINT -ErrorAction Stop
+                }
+                catch {
+                    Write-Warning "Geolocation request failed for $sourceIP; response details suppressed to protect the API key."
+                    continue
+                }
 
                 # Pull Data from the API response, and store them in variables
                 $responseData = $response.Content | ConvertFrom-Json
@@ -140,7 +147,7 @@ while ($true)
                 #
                 "latitude:$($latitude),longitude:$($longitude),destinationhost:$($destinationHost),username:$($username),sourcehost:$($sourceIp),state:$($state_prov), country:$($country),label:$($country) - $($sourceIp),timestamp:$($timestamp)" | Out-File $LOGFILE_PATH -Append -Encoding utf8
 
-                Write-Host -BackgroundColor Black -ForegroundColor Magenta "latitude:$($latitude),longitude:$($longitude),destinationhost:$($destinationHost),username:$($username),sourcehost:$($sourceIp),state:$($state_prov),label:$($country) - $($sourceIp),timestamp:$($timestamp)"
+                Write-Information -MessageData "latitude:$($latitude),longitude:$($longitude),destinationhost:$($destinationHost),username:$($username),sourcehost:$($sourceIp),state:$($state_prov),label:$($country) - $($sourceIp),timestamp:$($timestamp)" -InformationAction Continue
             }
             else {
                 # Entry already exists in custom log file. Do nothing, optionally, remove the # from the line below for output

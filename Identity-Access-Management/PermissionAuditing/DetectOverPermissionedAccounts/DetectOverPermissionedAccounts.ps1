@@ -5,7 +5,10 @@
 .DESCRIPTION
   Walks ACLs on one or more roots and flags ACEs that grant high rights (Write/Modify/Full)
   to accounts not in an allow-list. Optionally expands AD groups recursively to show
-  user membership that inherits those rights (effective risk).
+  user membership of those groups. Findings are per-ACE and describe POTENTIAL exposure: they do not
+  evaluate Deny precedence, share permissions, nested-group token effects, or any other condition required
+  to establish a user's effective access. Errors (unreadable paths, failed group expansion) are emitted as
+  non-terminating errors and a final warning rather than being hidden.
 
 .PARAMETER Path
   One or more root paths (UNC or local).
@@ -51,7 +54,7 @@
   .\DetectOverPermissionedAccounts.ps1 -Path '\\fs01\Projects' -Recurse -MaxDepth 4 `
     -AllowedPrincipals 'CONTOSO\FileAdmins','CONTOSO\Project-Leads' -OutputCsv .\overperm.csv
 
-  # Expand group membership to list at-risk users (effective access)
+  # Expand group membership to list members of flagged groups (not proof of effective access)
   .\DetectOverPermissionedAccounts.ps1 -Path 'D:\Data' -Recurse -ExpandADGroups -ResolveSIDs -MinRight Write -Verbose
 
 .NOTES (Environment-specific adjustments & future GUI prompts)
@@ -107,15 +110,24 @@ param(
 )
 
 begin {
-  function Simplify-Right {
+  . (Join-Path (Split-Path -Path $PSScriptRoot -Parent) 'Shared/FileSystemRights.ps1')
+  $script:ErrorCount = 0
+
+  function Write-ScanError {
+    param([string]$Msg)
+    $script:ErrorCount++
+    Write-Error -Message $Msg
+  }
+
+  function Get-SimplifiedRight {
     param([System.Security.AccessControl.FileSystemRights]$r)
-    if ($r -band [System.Security.AccessControl.FileSystemRights]::FullControl) { return 'FullControl' }
-    if ($r -band [System.Security.AccessControl.FileSystemRights]::Modify)      { return 'Modify' }
-    if ($r -band [System.Security.AccessControl.FileSystemRights]::Write)       { return 'Write' }
+    # Exact-mask labelling; anything below Write is 'ReadOrLower'
+    $label = Convert-FileSystemRightsLabel -Rights $r
+    if ($label -in @('FullControl','Modify','Write')) { return $label }
     return 'ReadOrLower'
   }
 
-  function Meets-Threshold {
+  function Test-RightThreshold {
     param([string]$simple,[string]$min='Modify')
     switch ($min) {
       'FullControl' { return ($simple -eq 'FullControl') }
@@ -124,7 +136,7 @@ begin {
     }
   }
 
-  function Res-Name {
+  function Resolve-AclPrincipalName {
     param($id,[switch]$DoResolve)
     try {
       if (-not $DoResolve) { return $id.Value }
@@ -134,15 +146,17 @@ begin {
     } catch { return $id.Value }
   }
 
-  function Enum-Targets {
+  function Get-ScanTarget {
     param([string]$root,[switch]$Recurse,[int]$MaxDepth,[switch]$Files)
     $targets = @($root)
     if ($Recurse) {
-      $dirs = Get-ChildItem -Path $root -Directory -Recurse -ErrorAction SilentlyContinue
+      $enumErrors = @()
+      $dirs = @(Get-ChildItem -LiteralPath $root -Directory -Recurse -ErrorAction SilentlyContinue -ErrorVariable +enumErrors)
       $targets += $dirs.FullName
       if ($Files) {
-        $targets += (Get-ChildItem -Path $root -File -Recurse -ErrorAction SilentlyContinue).FullName
+        $targets += (@(Get-ChildItem -LiteralPath $root -File -Recurse -ErrorAction SilentlyContinue -ErrorVariable +enumErrors)).FullName
       }
+      foreach ($e in $enumErrors) { Write-ScanError "Enumeration error under $root : $($e.Exception.Message)" }
       if ($MaxDepth -gt 0) {
         $base = ($root -split '[\\/]').Count
         $targets = $targets | Where-Object { (($_ -split '[\\/]').Count - $base) -le $MaxDepth }
@@ -151,17 +165,28 @@ begin {
     return $targets | Sort-Object -Unique
   }
 
-  function AD-Expand {
+  function Expand-AdGroupMember {
     param([string]$Principal,[string]$Domain)
-    # Returns list of user SamAccountNames (or domain\user) for a group principal
+    # Returns @{ Status; Users } for a group principal. Status is explicit so a failed lookup is never
+    # reported as "no members": NotAGroup | Expanded | Failed:<reason>
     try {
       Import-Module ActiveDirectory -ErrorAction Stop | Out-Null
-      $isGroup = (Get-ADGroup -Identity $Principal -Server $Domain -ErrorAction SilentlyContinue)
-      if (-not $isGroup) { return @() }
-      $mem = Get-ADGroupMember -Identity $Principal -Recursive -Server $Domain -ErrorAction Stop |
+      $dc = @{}
+      if ($Domain) { $dc.Server = $Domain }
+      $isGroup = $null
+      try { $isGroup = Get-ADGroup -Identity $Principal @dc -ErrorAction Stop }
+      catch {
+        # Only a definite "not found" means the principal is not a group; any other error is a failure
+        if ($_.Exception.GetType().Name -ne 'ADIdentityNotFoundException') { throw }
+        $isGroup = $null
+      }
+      if (-not $isGroup) { return @{ Status = 'NotAGroup'; Users = @() } }
+      $mem = Get-ADGroupMember -Identity $Principal -Recursive @dc -ErrorAction Stop |
              Where-Object { $_.objectClass -eq 'user' }
-      return $mem | ForEach-Object { $_.SamAccountName }
-    } catch { return @() }
+      return @{ Status = 'Expanded'; Users = @($mem | ForEach-Object { $_.SamAccountName }) }
+    } catch {
+      return @{ Status = "Failed: $($_.Exception.Message)"; Users = @() }
+    }
   }
 
   $findings = New-Object System.Collections.Generic.List[Object]
@@ -169,9 +194,9 @@ begin {
 
 process {
   foreach ($root in $Path) {
-    if (-not (Test-Path $root)) { Write-Warning "Path not found: $root"; continue }
+    if (-not (Test-Path -LiteralPath $root)) { Write-ScanError "Path not found: $root"; continue }
 
-    $targets = Enum-Targets -root $root -Recurse:$Recurse.IsPresent -MaxDepth $MaxDepth -Files:$IncludeFiles.IsPresent
+    $targets = Get-ScanTarget -root $root -Recurse:$Recurse.IsPresent -MaxDepth $MaxDepth -Files:$IncludeFiles.IsPresent
 
     foreach ($t in $targets) {
       if ($IncludePathLike -and ($t -notlike $IncludePathLike)) { continue }
@@ -179,15 +204,17 @@ process {
 
       try {
         $acl = Get-Acl -LiteralPath $t
-      } catch { Write-Verbose "ACL read failed for $t : $($_.Exception.Message)"; continue }
+      } catch { Write-ScanError "ACL read failed for $t : $($_.Exception.Message)"; continue }
+
+      $denyCount = @($acl.Access | Where-Object { $_.AccessControlType -eq 'Deny' }).Count
 
       foreach ($ace in $acl.Access) {
-        $principal = Res-Name -id $ace.IdentityReference -DoResolve:$ResolveSIDs.IsPresent
+        $principal = Resolve-AclPrincipalName -id $ace.IdentityReference -DoResolve:$ResolveSIDs.IsPresent
 
         if ($ExcludePrincipals -and ($principal -in $ExcludePrincipals)) { continue }
 
-        $right = Simplify-Right -r $ace.FileSystemRights
-        $isHigh = Meets-Threshold -simple $right -min $MinRight
+        $right = Get-SimplifiedRight -r $ace.FileSystemRights
+        $isHigh = Test-RightThreshold -simple $right -min $MinRight
         if (-not $isHigh) { continue }
 
         $isAllow = ($ace.AccessControlType -eq 'Allow')
@@ -205,13 +232,23 @@ process {
           InheritanceOn   = -not $acl.AreAccessRulesProtected
           AccessType      = $ace.AccessControlType
           IncludeReason   = ">= $MinRight and not in AllowedPrincipals"
+          DenyAcesOnPath  = $denyCount
+          ExpansionStatus = 'NotRequested'
+          ExpandedGroupMembers = $null
+          # Retained for compatibility; this contains expanded group membership, not effective access.
           EffectiveUsers  = $null
+          Caveat          = 'Single-ACE finding. Not an effective-access determination: Deny precedence, share permissions, other ACEs, and token/group state are not evaluated.'
         }
 
         if ($ExpandADGroups) {
           # Only attempt expansion for group-like principals
-          $users = AD-Expand -Principal $principal -Domain $Domain
-          if ($users.Count -gt 0) { $finding.EffectiveUsers = ($users -join '; ') }
+          $exp = Expand-AdGroupMember -Principal $principal -Domain $Domain
+          $finding.ExpansionStatus = $exp.Status
+          if ($exp.Status -like 'Failed*') { Write-ScanError "Group expansion failed for $principal : $($exp.Status)" }
+          if ($exp.Users.Count -gt 0) {
+            $finding.ExpandedGroupMembers = ($exp.Users -join '; ')
+            $finding.EffectiveUsers = $finding.ExpandedGroupMembers
+          }
         }
 
         $findings.Add($finding)
@@ -224,8 +261,13 @@ end {
   $out = $findings | Sort-Object Path, Principal
 
   if ($OutputCsv) {
-    try { $out | Export-Csv -Path $OutputCsv -NoTypeInformation -Encoding UTF8 } catch { Write-Warning "CSV export failed: $($_.Exception.Message)" }
+    try { $out | Export-Csv -Path $OutputCsv -NoTypeInformation -Encoding UTF8 -ErrorAction Stop } catch { Write-ScanError "CSV export failed: $($_.Exception.Message)" }
   }
 
-  $out | Format-Table -AutoSize
+  if ($script:ErrorCount -gt 0) {
+    Write-Warning "$($script:ErrorCount) error(s) occurred. The findings are INCOMPLETE; see the error stream."
+  }
+
+  # Objects are emitted (no Format-Table) so callers can consume them programmatically.
+  $out
 }

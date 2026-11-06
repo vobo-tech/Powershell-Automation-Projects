@@ -29,3 +29,5 @@ Thumbs.db
 # OS
 .DS_Store
 Thumbs.db
+# Generated toolkit output (plans, results, reports, demo)
+out/

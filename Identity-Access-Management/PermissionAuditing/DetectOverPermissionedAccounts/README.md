@@ -1,14 +1,14 @@
 # DetectOverPermissionedAccounts - Permission Risk Detection & Analysis
 
 ## Overview
-Advanced PowerShell script for detecting over-permissioned accounts and groups across NTFS file systems. Identifies accounts with excessive privileges outside of approved lists and optionally expands Active Directory group memberships to reveal effective user access risks.
+PowerShell script for finding NTFS ACEs that meet a configured rights threshold and are outside an allow-list. Optional Active Directory expansion lists user members of a flagged group; it does not establish those users' effective access.
 
 ## Key Features
 - **Policy-Based Detection**: Configurable allow/deny lists for permission validation
 - **Risk Thresholds**: Customizable minimum rights levels for flagging
 - **AD Group Expansion**: Recursive group membership analysis (requires RSAT)
 - **Path Filtering**: Include/exclude patterns for targeted analysis
-- **Effective Access Analysis**: Shows real user impact through group memberships
+- **Group Member Enumeration**: Lists recursively expanded user membership for a flagged group
 - **Remediation Guidance**: Provides context for addressing findings
 
 ## Detection Logic
@@ -22,7 +22,7 @@ Advanced PowerShell script for detecting over-permissioned accounts and groups a
 
 ### Risk Assessment Factors
 - **Inheritance Status**: Inherited vs. explicit permissions
-- **Group Membership**: Effective access through group membership
+- **Group Membership**: Expanded membership is contextual evidence, not effective access
 - **Permission Level**: Write, Modify, or FullControl classification
 - **Path Sensitivity**: Location-based risk assessment
 
@@ -100,16 +100,18 @@ Advanced PowerShell script for detecting over-permissioned accounts and groups a
 - **InheritanceOn**: Whether inheritance is enabled on object
 - **AccessType**: ACE type (typically Allow)
 - **IncludeReason**: Explanation for why this was flagged
-- **EffectiveUsers**: Expanded user list (if `-ExpandADGroups` used)
+- **ExpandedGroupMembers**: User members returned by recursive AD group expansion (if `-ExpandADGroups` is used)
+- **EffectiveUsers**: Compatibility field containing the same expanded group-member list; it does not mean effective access
+- **Caveat**: States that the finding is based on one ACE and is not an effective-access determination
 
 ## Active Directory Integration
 
-### Group Expansion
+### Group Expansion (not effective-access evaluation)
 When `-ExpandADGroups` is enabled:
-- Recursively expands nested group memberships
-- Identifies individual users with effective access
+- Recursively expands nested group membership and lists user members
+- Does not combine ACL entries, apply deny precedence, evaluate share permissions, or model tokens/application policy
 - Requires RSAT ActiveDirectory module
-- Populates `EffectiveUsers` field with user list
+- Populates `ExpandedGroupMembers`; the legacy `EffectiveUsers` field is retained as a compatibility alias
 
 ### Performance Considerations
 - AD queries can significantly impact scan time

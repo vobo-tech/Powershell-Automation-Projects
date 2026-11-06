@@ -4,6 +4,9 @@ This folder groups PowerShell automation scripts related to user accounts, permi
 
 ## Categories
 
+### ADIdentityOps
+A tested-against-a-synthetic-AD module for read-only identity snapshots, reviewable offboarding plans, controlled execution with `-WhatIf`, verification, resume, and JSON/CSV/HTML evidence. Not production-ready; see [ADIdentityOps/README.md](ADIdentityOps/README.md) for status, permissions, and limitations.
+
 ### UserAccountManagement
 Scripts for creating, modifying, and managing user accounts including bulk operations, password resets, and inactive account reporting.
 

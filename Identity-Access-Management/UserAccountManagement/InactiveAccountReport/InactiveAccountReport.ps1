@@ -1,4 +1,4 @@
-# ██████╗░██╗░░░██╗███████╗███████╗  ███╗░░██╗███████╗██████╗░██████╗░
+﻿# ██████╗░██╗░░░██╗███████╗███████╗  ███╗░░██╗███████╗██████╗░██████╗░
 # ██╔══██╗██║░░░██║██╔════╝██╔════╝  ████╗░██║██╔════╝██╔══██╗██╔══██╗
 # ██████╦╝██║░░░██║█████╗░░█████╗░░  ██╔██╗██║█████╗░░██████╔╝██║░░██║
 # ██╔══██╗██║░░░██║██╔══╝░░██╔══╝░░  ██║╚████║██╔══╝░░██╔══██╗██║░░██║
@@ -11,7 +11,11 @@
   Reports AD users inactive for N days; optional disable and move to quarantine OU.
 
 .DESCRIPTION
-  - Calculates inactivity via lastLogonTimestamp -> DateTime.
+  - Calculates inactivity via lastLogonTimestamp -> DateTime. lastLogonTimestamp is replicated lazily and can lag
+    real logons by roughly 14 days; it also does not reflect many non-interactive or token-based sign-ins.
+    Results are CANDIDATES for review, not authoritative evidence of inactivity. Confirm with other sources
+    (for example per-DC lastLogon, sign-in logs, or the owner) before disabling or moving anything.
+  - Emits report objects to the pipeline (no Format-Table). Remediation outcomes are recorded per account.
   - Filters by OU (SearchBase) and can include disabled users if requested.
   - Optional remediation: Disable-ADAccount and/or Move-ADObject.
   - Exports to CSV.
@@ -46,19 +50,19 @@ param(
   [string]$MoveToOU               # Move found accounts to this OU (DN)
 )
 
-function Convert-LLTToDate {
-  param([long]$LLT)
-  if (-not $LLT) { return $null }
-  return [DateTime]::FromFileTime($LLT)
-}
-
 begin {
+  # Helper lives inside begin{}: a script that mixes top-level functions with begin/process/end blocks does not parse as intended.
+  function Convert-LLTToDate {
+    param([long]$LLT)
+    if (-not $LLT) { return $null }
+    return [DateTime]::FromFileTime($LLT)
+  }
+
   try { Import-Module ActiveDirectory -ErrorAction Stop } catch { throw "Missing ActiveDirectory module." }
 
   $filter = if ($IncludeDisabled) { "*" } else { "(Enabled -eq $true)" }
   $props  = @("SamAccountName","Enabled","LastLogonTimeStamp","DistinguishedName","whenCreated","DisplayName")
   $getParams = @{
-    LDAPFilter   = $null
     Filter       = $filter
     Properties   = $props
     ErrorAction  = 'Stop'
@@ -90,6 +94,10 @@ process {
         ConsideredInactiveSince = $lastActive
         DaysInactive   = [int]($now - $lastActive).TotalDays
         DN             = $u.DistinguishedName
+        InactivityBasis = if ($lastLogon) { 'LastLogonTimestamp (approximate)' } else { 'whenCreated (no LastLogonTimestamp recorded)' }
+        DisableStatus  = 'NotRequested'
+        MoveStatus     = 'NotRequested'
+        RemediationErrors = @()
       })
     }
   }
@@ -98,35 +106,52 @@ process {
 end {
   if ($Disable -or $MoveToOU) {
     foreach ($r in $results) {
-      if ($Disable -and $PSCmdlet.ShouldProcess("User '$($r.SamAccountName)'", "Disable")) {
-        try {
-          Disable-ADAccount -Identity $r.SamAccountName -ErrorAction Stop
-          Write-Verbose "Disabled '$($r.SamAccountName)'."
-        } catch {
-          Write-Warning "Failed to disable '$($r.SamAccountName)': $($_.Exception.Message)"
-        }
+      $errs = New-Object System.Collections.Generic.List[string]
+      if ($Disable) {
+        if ($PSCmdlet.ShouldProcess("User '$($r.SamAccountName)'", "Disable")) {
+          try {
+            Disable-ADAccount -Identity $r.SamAccountName -ErrorAction Stop
+            $r.DisableStatus = 'Succeeded'
+            Write-Verbose "Disabled '$($r.SamAccountName)'."
+          } catch {
+            $r.DisableStatus = 'Failed'
+            $errs.Add("Failed to disable '$($r.SamAccountName)': $($_.Exception.Message)")
+          }
+        } else { $r.DisableStatus = 'Skipped' }
       }
       if ($MoveToOU) {
-        if ($PSCmdlet.ShouldProcess("User '$($r.SamAccountName)'", "Move to '$MoveToOU'")) {
+        if ($r.DisableStatus -eq 'Failed') {
+          # Do not move an account that was supposed to be disabled first
+          $r.MoveStatus = 'Blocked'
+          $errs.Add("Move of '$($r.SamAccountName)' blocked because the disable failed.")
+        }
+        elseif ($PSCmdlet.ShouldProcess("User '$($r.SamAccountName)'", "Move to '$MoveToOU'")) {
           try {
             Move-ADObject -Identity $r.DN -TargetPath $MoveToOU -ErrorAction Stop
+            $r.MoveStatus = 'Succeeded'
             Write-Verbose "Moved '$($r.SamAccountName)' to '$MoveToOU'."
           } catch {
-            Write-Warning "Failed to move '$($r.SamAccountName)': $($_.Exception.Message)"
+            $r.MoveStatus = 'Failed'
+            $errs.Add("Failed to move '$($r.SamAccountName)': $($_.Exception.Message)")
           }
-        }
+        } else { $r.MoveStatus = 'Skipped' }
       }
+      $r.RemediationErrors = $errs.ToArray()
+      foreach ($e in $errs) { Write-Error $e }
     }
   }
+
+  $sorted = @($results | Sort-Object DaysInactive -Descending)
 
   if ($ExportCsv) {
     try {
-      $results | Sort-Object DaysInactive -Descending | Export-Csv -Path $ExportCsv -NoTypeInformation
+      $sorted | Select-Object * -ExcludeProperty RemediationErrors | Export-Csv -Path $ExportCsv -NoTypeInformation -ErrorAction Stop
       Write-Verbose "Exported report to '$ExportCsv'."
     } catch {
-      Write-Warning "Failed to export report: $($_.Exception.Message)"
+      Write-Error "Failed to export report: $($_.Exception.Message)"
     }
   }
 
-  $results | Sort-Object DaysInactive -Descending | Format-Table -AutoSize
+  # Objects are emitted (no Format-Table) so callers can consume them programmatically.
+  $sorted
 }

@@ -1,0 +1,26 @@
+{
+  "_comment": "SYNTHETIC EXAMPLE. Replace every value with your own; keep your real file out of source control. No real domain, SID, or identity belongs in this repository.",
+  "SchemaVersion": "1.0",
+  "DomainController": "dc01.corp.example.invalid",
+  "AllowedSourceOUs": [
+    "OU=Staff,OU=Corp,DC=corp,DC=example,DC=invalid"
+  ],
+  "QuarantineOU": "OU=Quarantine,OU=Disabled,DC=corp,DC=example,DC=invalid",
+  "ProtectedAccounts": [
+    "S-1-5-21-1111111111-2222222222-3333333333-500"
+  ],
+  "ProtectedGroups": [
+    "S-1-5-21-1111111111-2222222222-3333333333-512",
+    "S-1-5-21-1111111111-2222222222-3333333333-519",
+    "S-1-5-21-1111111111-2222222222-3333333333-518"
+  ],
+  "GroupRemovalExclusions": [
+    "S-1-5-21-1111111111-2222222222-3333333333-1100"
+  ],
+  "PlanLifetimeHours": 24,
+  "Output": {
+    "PlanDirectory": "./out/plans",
+    "ResultDirectory": "./out/results",
+    "ReportDirectory": "./out/reports"
+  }
+}

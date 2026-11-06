@@ -1,6 +1,6 @@
 # Permission Auditing
 
-Scripts to **inventory NTFS permissions** and **detect over-permissioned accounts** across Windows file servers and shares. Outputs are flattened (CSV/JSONL) for quick triage, spreadsheet review, or SIEM ingestion.
+Scripts to **inventory NTFS permissions** and **detect over-permissioned accounts** across Windows file servers and shares. Outputs are flattened (CSV/JSONL) for quick triage, spreadsheet review, or SIEM ingestion. Findings describe ACL entries and group membership; they do not establish effective access.
 
 ---
 
@@ -21,6 +21,7 @@ Inventory ACLs (folders by default; files optional) and flag potential risks:
 - **Inheritance disabled**
 - **Unresolved SIDs** (orphaned accounts)
 - **Owner anomalies**
+- **Caveat** on each row: an individual ACE or owner record does not determine effective access
 
 **Examples**
 ```powershell
@@ -39,7 +40,7 @@ Inventory ACLs (folders by default; files optional) and flag potential risks:
 - **Output**: `-OutputCsv`, `-OutputJsonl` (+ `-ErrorLog`)
 
 ### 2) DetectOverPermissionedAccounts.ps1
-Flag Modify/Full/Write rights granted to users/groups outside an allow-list. Optional AD expansion reveals effective risk for individual users.
+Flag Modify/Full/Write rights granted to users/groups outside an allow-list. Optional AD expansion lists user members of flagged groups; it does not establish effective access for those users.
 
 **Examples**
 ```powershell
@@ -47,7 +48,7 @@ Flag Modify/Full/Write rights granted to users/groups outside an allow-list. Opt
 .\DetectOverPermissionedAccounts.ps1 -Path "\\fs01\HR" -Recurse -MaxDepth 5 `
   -AllowedPrincipals 'CONTOSO\FileAdmins','CONTOSO\HR-Managers' -OutputCsv .\overperm.csv
 
-# Expand groups to list effective users (requires RSAT AD)
+# Expand groups to list their user members (requires RSAT AD; not an effective-access calculation)
 .\DetectOverPermissionedAccounts.ps1 -Path "D:\Data" -Recurse -ExpandADGroups -ResolveSIDs -MinRight Write -Verbose
 ```
 
@@ -76,10 +77,14 @@ Flag Modify/Full/Write rights granted to users/groups outside an allow-list. Opt
 - **Error Logs**: Comprehensive error tracking for access denied scenarios
 
 ### Enterprise Features
-- **Multi-path Analysis**: Concurrent scanning across multiple file system roots
+- **Multi-path Analysis**: Sequential scanning across multiple file system roots
 - **Depth Control**: Configurable recursion limits for performance management
 - **SID Resolution**: Optional name resolution for improved readability
-- **AD Integration**: Group membership expansion for effective access analysis
+- **AD Integration**: Optional recursive group membership enumeration; it does not calculate effective access.
+
+Each finding is based on one ACE. The scripts do not combine ACEs, apply deny precedence, evaluate share permissions, or
+model the user's access token and application policy. Group expansion reports member names only. Review findings
+against the complete resource and identity context before making access decisions.
 
 ---
 
